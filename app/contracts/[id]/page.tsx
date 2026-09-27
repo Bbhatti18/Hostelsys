@@ -41,6 +41,7 @@ export default function ViewContractPage() {
   const [agreementUrl, setAgreementUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [reviewing, setReviewing] = useState(false);
+  const [signatureDisplayUrl, setSignatureDisplayUrl] = useState("");
   const [message, setMessage] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [actionError, setActionError] = useState("");
@@ -188,8 +189,36 @@ export default function ViewContractPage() {
     );
   }
 
-  const signatureUrl =
-    contract.resident_signature_url;
+  const signatureUrl = contract.resident_signature_url;
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadSignatureUrl() {
+      if (!signatureUrl) {
+        if (active) setSignatureDisplayUrl("");
+        return;
+      }
+
+      if (/^https?:\/\//i.test(signatureUrl)) {
+        if (active) setSignatureDisplayUrl(signatureUrl);
+        return;
+      }
+
+      const { data, error } = await supabase.storage
+        .from("contract-signature")
+        .createSignedUrl(signatureUrl, 60 * 5);
+
+      if (active) {
+        setSignatureDisplayUrl(error || !data?.signedUrl ? "" : data.signedUrl);
+      }
+    }
+
+    void loadSignatureUrl();
+    return () => {
+      active = false;
+    };
+  }, [signatureUrl]);
   const displayedStatus = contract.status ?? "Draft";
 
   return (
@@ -242,7 +271,11 @@ export default function ViewContractPage() {
             <p className="mb-3 text-sm text-gray-500">Resident Signature</p>
             {/* Existing signature URLs are preserved and rendered as stored. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={signatureUrl} alt="Resident Signature" className="max-w-full rounded border" />
+            {signatureDisplayUrl ? (
+              <img src={signatureDisplayUrl} alt="Resident Signature" className="max-w-full rounded border" />
+            ) : (
+              <p className="text-sm text-amber-700">Loading secure signature preview...</p>
+            )}
           </div>
         )}
 
