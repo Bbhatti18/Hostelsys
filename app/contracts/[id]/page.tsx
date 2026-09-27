@@ -176,20 +176,7 @@ export default function ViewContractPage() {
     }
   }
 
-  if (loading) {
-    return <div className="p-6 text-gray-600">Loading contract...</div>;
-  }
-
-  if (!contract) {
-    return (
-      <div className="p-6">
-        <p className="mb-4 text-red-600">{message || "Contract not found."}</p>
-        <Link href="/contracts" className="rounded-lg bg-gray-200 px-4 py-2 text-gray-700">Back to Contracts</Link>
-      </div>
-    );
-  }
-
-  const signatureUrl = contract.resident_signature_url;
+  const signatureUrl = contract?.resident_signature_url ?? null;
 
   useEffect(() => {
     let active = true;
@@ -219,6 +206,19 @@ export default function ViewContractPage() {
       active = false;
     };
   }, [signatureUrl]);
+
+  if (loading) {
+    return <div className="p-6 text-gray-600">Loading contract...</div>;
+  }
+
+  if (!contract) {
+    return (
+      <div className="p-6">
+        <p className="mb-4 text-red-600">{message || "Contract not found."}</p>
+        <Link href="/contracts" className="rounded-lg bg-gray-200 px-4 py-2 text-gray-700">Back to Contracts</Link>
+      </div>
+    );
+  }
   const displayedStatus = contract.status ?? "Draft";
 
   return (
