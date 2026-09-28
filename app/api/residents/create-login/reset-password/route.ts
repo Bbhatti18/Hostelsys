@@ -173,14 +173,30 @@ export async function POST(request: NextRequest) {
       authUser.user_metadata?.account_type ?? "",
     ).trim().toLowerCase();
 
-    if (
-      (linkedResidentId && linkedResidentId !== resident.id) ||
-      (accountType && accountType !== "resident")
-    ) {
+    if (accountType && accountType !== "resident") {
       return jsonError(
-        "The matching auth account is not linked to this resident. Resolve the account mapping before resetting the password.",
+        "The matching auth account belongs to a different account type and cannot be relinked automatically.",
         409,
       );
+    }
+
+    if (linkedResidentId !== resident.id || accountType !== "resident") {
+      const { error: mappingError } =
+        await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+          user_metadata: {
+            ...authUser.user_metadata,
+            resident_id: resident.id,
+            full_name: resident.full_name,
+            account_type: "resident",
+          },
+        });
+
+      if (mappingError) {
+        return jsonError(
+          "The resident portal account mapping could not be repaired.",
+          500,
+        );
+      }
     }
 
     const temporaryPassword = createTemporaryPassword();
