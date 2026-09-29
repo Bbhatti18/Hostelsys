@@ -45,12 +45,15 @@ export async function POST(request: NextRequest) {
     const admissionId = String(formData.get("admissionId") ?? "");
     const rentBillId = String(formData.get("rentBillId") ?? "");
     const depositBillId = String(formData.get("depositBillId") ?? "");
+    const includeLateFee = formData.get("includeLateFee") === "true";
+    const includeRent = formData.get("includeRent") !== "false";
     const amount = Math.round(Number(formData.get("amount")) * 100) / 100;
     const paymentMethod = String(formData.get("paymentMethod") ?? "").trim().slice(0, 100);
     const referenceNumber = String(formData.get("referenceNumber") ?? "").trim().slice(0, 120);
     const notes = String(formData.get("notes") ?? "").trim().slice(0, 2000);
     const file = formData.get("file");
-    if (!admissionId || !rentBillId || !depositBillId || !Number.isFinite(amount) || amount <= 0 || !paymentMethod || !(file instanceof File)) return errorResponse("Current obligations, amount, payment method, and receipt file are required.", 400);
+    if (!admissionId || !rentBillId || (!includeLateFee && !depositBillId) || !Number.isFinite(amount) || amount <= 0 || !paymentMethod || !(file instanceof File)) return errorResponse("Current obligations, amount, payment method, and receipt file are required.", 400);
+    if (includeLateFee && depositBillId && !includeRent) return errorResponse("A deposit plus fine payment must include rent.", 400);
     if (!SAFE_FILE_TYPES.has(file.type) || file.size <= 0 || file.size > MAX_FILE_SIZE) return errorResponse("Receipt files must be PDF, JPEG, or PNG and no larger than 5 MB.", 400);
     const buffer = await file.arrayBuffer();
     if (!hasExpectedSignature(new Uint8Array(buffer).slice(0, 8), file.type)) return errorResponse("The receipt file content does not match its declared file type.", 400);
@@ -67,12 +70,16 @@ export async function POST(request: NextRequest) {
     uploadedPath = `${resident.id}/combined/${admissionId}/${crypto.randomUUID()}-${safeFileName(file.name)}`;
     const { error: uploadError } = await supabaseAdmin.storage.from("payment-receipts").upload(uploadedPath, buffer, { contentType: file.type, cacheControl: "3600", upsert: false });
     if (uploadError) return errorResponse("The receipt file could not be uploaded. Please try again.", 500);
-    const receiptNotes = [`Payment method: ${paymentMethod}`, "Payment purpose: Rent + Security Deposit", `Admission ID: ${admissionId}`, notes].filter(Boolean).join("\n");
-    const { data, error } = await supabaseAdmin.rpc("create_combined_payment_submission", {
+    const purpose = includeLateFee
+      ? [includeRent ? "Rent" : "", depositBillId ? "Security Deposit" : "", "Late Fee"].filter(Boolean).join(" + ")
+      : "Rent + Security Deposit";
+    const receiptNotes = [`Payment method: ${paymentMethod}`, `Payment purpose: ${purpose}`, `Admission ID: ${admissionId}`, notes].filter(Boolean).join("\n");
+    const { data, error } = await supabaseAdmin.rpc(includeLateFee ? "create_late_fee_payment_submission" : "create_combined_payment_submission", {
       p_resident_id: resident.id,
       p_admission_id: admissionId,
       p_rent_bill_id: rentBillId,
-      p_deposit_bill_id: depositBillId,
+      p_deposit_bill_id: depositBillId || null,
+      ...(includeLateFee ? { p_include_rent: includeRent } : {}),
       p_amount: amount,
       p_payment_method: paymentMethod,
       p_reference_number: referenceNumber,
@@ -84,7 +91,7 @@ export async function POST(request: NextRequest) {
       await supabaseAdmin.storage.from("payment-receipts").remove([uploadedPath]);
       return errorResponse(error?.message || "The combined payment could not be submitted.", 409);
     }
-    return NextResponse.json({ message: "Combined payment submitted for verification.", ...data }, { headers: { "Cache-Control": "private, no-store" } });
+    return NextResponse.json({ message: "Payment submitted for verification.", ...data }, { headers: { "Cache-Control": "private, no-store" } });
   } catch {
     if (uploadedPath) await supabaseAdmin.storage.from("payment-receipts").remove([uploadedPath]);
     return errorResponse("The combined payment could not be submitted.", 500);

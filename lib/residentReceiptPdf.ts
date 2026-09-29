@@ -17,6 +17,7 @@ export type ResidentReceiptPdfData = {
   billReference: string;
   paymentType: string;
   amount: number;
+  lateFeeAmount?: number;
   paymentMethod: string;
   paymentStatus: string;
   verifiedBy: string;
@@ -110,6 +111,11 @@ export async function createResidentReceiptPdf(data: ResidentReceiptPdfData) {
   drawDetail(page, font, bold, "Payment type", data.paymentType, 42, y, 235);
   drawDetail(page, font, bold, "Payment method", data.paymentMethod, 312, y, 240);
   y -= 72;
+  if (data.lateFeeAmount && data.lateFeeAmount > 0) {
+    page.drawText(`Late Fee / Fine: ${formatAmount(data.lateFeeAmount)}`, { x: 42, y: y + 30, size: 10, font: bold });
+    page.drawText(`Other allocated obligations: ${formatAmount(data.amount - data.lateFeeAmount)}`, { x: 42, y: y + 14, size: 10, font });
+    y -= 35;
+  }
   page.drawRectangle({ x: 42, y: y - 25, width: 511, height: 64, color: rgb(0.94, 0.95, 1) });
   page.drawText("AMOUNT PAID", { x: 60, y: y + 12, size: 9, font: bold, color: rgb(0.39, 0.45, 0.55) });
   page.drawText(formatAmount(data.amount), { x: 60, y: y - 12, size: 20, font: bold, color: rgb(0.18, 0.14, 0.45) });

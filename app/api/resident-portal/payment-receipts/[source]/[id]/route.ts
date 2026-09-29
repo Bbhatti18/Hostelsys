@@ -47,8 +47,9 @@ export async function GET(request: NextRequest, context: { params: Promise<{ sou
     let paymentMethod = "Payment method not recorded";
     let receiptNumber = "";
     let billId = "";
+    let lateFeeAmount = 0;
     if (source === "payment") {
-      const result = await supabaseAdmin.from("payments").select("id, bill_id, payment_number, payment_date, amount, payment_method, reference_number, payment_status, verified_by, verified_at, created_at").eq("id", id).eq("resident_id", resident.id).maybeSingle();
+      const result = await supabaseAdmin.from("payments").select("id, bill_id, payment_number, payment_date, amount, payment_method, reference_number, payment_status, verified_by, verified_at, created_at, notes").eq("id", id).eq("resident_id", resident.id).maybeSingle();
       if (result.error) return errorResponse("The receipt could not be loaded.", 500);
       record = result.data;
       if (!record) return errorResponse("Receipt not found.", 404);
@@ -73,6 +74,28 @@ export async function GET(request: NextRequest, context: { params: Promise<{ sou
         ? "Rent + Security Deposit"
         : isSecurityDepositReceipt(record.notes) ? "Security deposit" : billId ? "Bill payment" : "Receipt payment";
       paymentMethod = receiptPaymentMethod(record.notes) || paymentMethod;
+    }
+
+    if (!billId) {
+      const paymentId = source === "payment" ? record.id : record.payment_id;
+      const { data: fine, error: fineError } = await supabaseAdmin.from("late_fee_payment_allocations")
+        .select("amount, applied_at, reversed_at, late_fees(bill_id)").eq("payment_id", paymentId).maybeSingle();
+      if (fineError) return errorResponse("The payment allocations could not be checked.", 500);
+      if (fine) {
+        if (!fine.applied_at || fine.reversed_at) return errorResponse("The fine allocation needs reconciliation.", 409);
+        lateFeeAmount = Number(fine.amount);
+        const obligation = Array.isArray(fine.late_fees) ? fine.late_fees[0] : fine.late_fees;
+        billId = value(obligation?.bill_id);
+        const { data: normal, error: allocationError } = await supabaseAdmin.from("payment_allocations")
+          .select("amount, bills(bill_type)").eq("payment_id", paymentId);
+        if (allocationError || Math.round((normal ?? []).reduce((sum, row) => sum + Number(row.amount), lateFeeAmount) * 100) !== Math.round(Number(record.amount) * 100)) {
+          return errorResponse("The payment allocations need reconciliation.", 409);
+        }
+        paymentType = [...(normal ?? []).map(row => {
+          const bill = Array.isArray(row.bills) ? row.bills[0] : row.bills;
+          return value(bill?.bill_type) || "Bill payment";
+        }), "Late Fee"].join(" + ");
+      }
     }
 
     const [{ data: bill }, { data: admissionRows }, { data: settings }] = await Promise.all([
@@ -104,6 +127,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ sou
       billReference: value(bill?.bill_number) || value(record.reference_number) || (paymentType === "Security deposit" ? "Security Deposit" : "No bill reference"),
       paymentType,
       amount: Number(record.amount || 0),
+      lateFeeAmount,
       paymentMethod,
       paymentStatus: "Paid",
       verifiedBy,

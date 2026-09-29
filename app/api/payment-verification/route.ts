@@ -171,7 +171,7 @@ export async function POST(request: NextRequest) {
         });
         if (combinedRejectError) return jsonError(combinedRejectError.message, 409);
         const notification = await notifyResidentEvent("payment_rejected", receipt.id);
-        return NextResponse.json({ message: "Combined receipt rejected. No amount was applied to either bill.", notificationWarning: notification.warning }, { headers: { "Cache-Control": "private, no-store" } });
+        return NextResponse.json({ message: "Payment rejected. No amount was applied; any fine freeze was released.", notificationWarning: notification.warning }, { headers: { "Cache-Control": "private, no-store" } });
       }
       if (existingPayment?.payment_status === "Verified") {
         return jsonError(
@@ -208,7 +208,7 @@ export async function POST(request: NextRequest) {
       });
       if (combinedVerifyError || !verified) return jsonError(combinedVerifyError?.message || "The combined payment could not be verified.", 409);
       const notification = await notifyResidentEvent("payment_verified", receipt.id);
-      return NextResponse.json({ message: "Combined receipt verified and both bill balances refreshed.", billSummaryUpdated: true, notificationWarning: notification.warning }, { headers: { "Cache-Control": "private, no-store" } });
+      return NextResponse.json({ message: "Payment verified and allocated balances refreshed.", billSummaryUpdated: true, notificationWarning: notification.warning }, { headers: { "Cache-Control": "private, no-store" } });
     }
 
     if (depositAdmissionId) {
