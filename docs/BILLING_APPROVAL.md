@@ -8,7 +8,7 @@
    (falling back to the resident's non-cancelled contract), and inserts one bill
    per admission with:
    - `bill_status = 'Pending Approval'`
-   - `due_date` exactly 5 days after generation (`BILL_APPROVAL_DUE_DAYS`)
+   - `due_date` is one day before the admission anniversary in the billing month (clamp the anniversary to month end first); initial admission Rent is due on admission.
    - `total_amount = balance_amount = rent`
 
    Admissions that already have a bill for that month, are archived, or carry no

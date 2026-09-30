@@ -8,7 +8,6 @@ export type BulkGenerateSkip = {
 
 export type BulkGenerateResult = {
   billingMonth: string;
-  dueDate: string;
   createdCount: number;
   skipped: BulkGenerateSkip[];
   activeAdmissionCount: number;

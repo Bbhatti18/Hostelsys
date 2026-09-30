@@ -1,15 +1,20 @@
 Late fee lifecycle (local migration only)
 =======================================
 
-The migration `20260929210000_late_fee_ledger.sql` requires the existing finance
-migration chain. It has not been applied to Supabase.
+The corrective migration `20260930120000_rent_dates_relaxation_reminders.sql`
+follows the existing finance and late-fee ledger migrations. Apply separately
+through your normal release process; this implementation runs locally only.
 
 For each Rent bill, let D = bill.due_date and E = the next actual Rent bill's
 due_date strictly after D for the same admission AND resident. Only bills in
 Pending, Partially Paid, Overdue or Paid state establish this boundary.
-N = max(0, min(Karachi as-of date, E - 1 day) - D + 1 day). If no next bill exists,
-N = max(0, Karachi as-of date - D + 1 day). There is no monthly-anniversary cap.
-The calculated fine is zero for N <= 5, otherwise N * Rs.300. Accrual requires
+S = max(D + 1 day, first day of the Karachi as-of calendar month).
+N = max(0, min(Karachi as-of date, E - 1 day) - S + 1 day). If no next bill exists,
+the end is the as-of date, with no invented monthly/anniversary end boundary.
+On calendar dates 1–5 the payable calculation is zero. From the 6th it is N *
+Rs.300, including eligible relaxation days. A bill due later never inherits
+pre-due days. This is the current calendar month's basis: an already-overdue
+bill on the 6th is Rs.1,800. Accrual requires
 positive outstanding rent after proportional discount and rent-first verified
 payments, a current admission, and a payable Rent bill. Existing charged amounts
 survive rent settlement; no more accrues once rent is cleared. Before rent credit
@@ -31,10 +36,31 @@ history records both payable and calculated before/after amounts, actor, time an
 reason. Financial status is derived on every write; Charged, Released and Reversed
 audit actions do not overwrite a financially settled Paid/Waived status.
 
-The actual bill due date is preserved, including admission bills currently created
-with admission_date + 5 days. A due date before admission is refused for charging
-or submission and produces no new accrual; repair such data explicitly. There is
-no fallback to billing_month or the first calendar day.
+Initial Rent is due on admission. Recurring Rent is due one day before the
+admission anniversary, clamped to the target month's last day before subtracting.
+A due date before admission is refused for charging or submission and produces
+no new accrual. The corrective migration repairs only current/future recurring
+bills for the current admission with no payments, receipts, allocations or fine
+ledger. It leaves initial, historical and financially touched records unchanged.
+
+Daily reminders run at 04:00 UTC (09:00 Asia/Karachi) using
+`GET /api/cron/rent-reminders`. Configure `CRON_SECRET` in the deployment's server
+environment; Vercel supplies its bearer token. No browser/staff bulk-send route
+is provided. The endpoint uses the existing transactional email/Gmail fallback.
+Only the current calendar billing month's outstanding Rent for a current
+Pending/Active admission and Pending/Active resident is selected, from the 1st,
+including Rent whose actual due date is later in the month. Deposit-only balances
+are excluded. Quotes preserve existing receipt freezes, waivers and payments.
+
+`rent_reminder_deliveries` records a unique resident/bill/Karachi-day claim before
+delivery. Successful and uncertain claims cannot resend that day, including after
+a crash between SMTP acceptance and recording success. Failed/uncertain delivery
+requires operator review; there is deliberately no automatic claim expiry for
+Gmail, which lacks provider idempotency. A later calendar day gets a new claim.
+A run reaching its 270-second/1,000-message budget returns HTTP 503 with counts;
+an authenticated scheduler retry continues with unclaimed bills. Deployment
+requires a Vercel plan supporting the configured 300-second function duration.
+Local reminder tests inject the transport and never load credentials or send mail.
 
 Authenticated RPCs (normal Supabase user session; never a service-role browser key):
 

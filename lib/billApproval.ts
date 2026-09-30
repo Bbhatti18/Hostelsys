@@ -1,5 +1,3 @@
-export const BILL_APPROVAL_DUE_DAYS = 5;
-
 export const UNAPPROVED_BILL_STATUSES = ["Pending Approval", "Draft"] as const;
 
 export type UnapprovedBillStatus = (typeof UNAPPROVED_BILL_STATUSES)[number];
@@ -29,14 +27,19 @@ export function monthStartDate(billingMonth: string) {
   return `${billingMonth.slice(0, 7)}-01`;
 }
 
-/** Bulk-generated bills fall due exactly BILL_APPROVAL_DUE_DAYS after generation. */
-export function dueDateFromGeneration(
-  generatedAt = new Date(),
-  days = BILL_APPROVAL_DUE_DAYS,
-) {
-  const due = new Date(generatedAt.getTime());
-  due.setUTCDate(due.getUTCDate() + days);
-  return due.toISOString().slice(0, 10);
+/** Initial rent is immediate; clamp recurring anniversaries before subtracting a day. */
+export function rentDueDate(admissionDate: string, billingMonth: string) {
+  const admission = admissionDate.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(admission) ||
+      !Number.isFinite(Date.parse(admission + "T00:00:00Z")) ||
+      new Date(admission + "T00:00:00Z").toISOString().slice(0, 10) !== admission ||
+      !isBillingMonth(billingMonth) || billingMonth < admission.slice(0, 7)) {
+    throw new Error("A valid admission date and current or later billing month are required.");
+  }
+  if (billingMonth === admission.slice(0, 7)) return admission;
+  const [year, month] = billingMonth.split("-").map(Number);
+  const day = Math.min(Number(admission.slice(8, 10)), new Date(Date.UTC(year, month, 0)).getUTCDate());
+  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
 }
 
 export function billingMonthLabel(value: string) {

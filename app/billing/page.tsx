@@ -662,7 +662,7 @@ function BillingContent() {
     const parts = [
       `${result.activeAdmissionCount} active admission${result.activeAdmissionCount === 1 ? "" : "s"} reviewed`,
     ];
-    if (result.createdCount > 0) parts.push(`due ${result.dueDate}`);
+    if (result.createdCount > 0) parts.push("due dates follow each admission cycle");
     if (result.skipped.length > 0) {
       parts.push(
         `${result.skipped.length} skipped (${result.skipped[0].reason})`,

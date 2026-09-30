@@ -8,9 +8,8 @@ import {
   requireStaff,
 } from "@/lib/adminApiAuth";
 import {
-  BILL_APPROVAL_DUE_DAYS,
   billingMonthOf,
-  dueDateFromGeneration,
+  rentDueDate,
   isBillingMonth,
 } from "@/lib/billApproval";
 import {
@@ -65,7 +64,7 @@ export async function POST(request: NextRequest) {
     const [admissionsResult, billsResult] = await Promise.all([
       supabaseAdmin
         .from("admissions")
-        .select("id, resident_id, room_id, monthly_rent, status")
+        .select("id, resident_id, room_id, monthly_rent, admission_date, status")
         .eq("status", "Active")
         .order("created_at", { ascending: true }),
       supabaseAdmin
@@ -85,7 +84,6 @@ export async function POST(request: NextRequest) {
     if (admissions.length === 0) {
       return apiJson({
         billingMonth,
-        dueDate: dueDateFromGeneration(),
         created: [],
         createdCount: 0,
         skipped: [],
@@ -140,7 +138,6 @@ export async function POST(request: NextRequest) {
     }
 
     const generatedAt = new Date();
-    const dueDate = dueDateFromGeneration(generatedAt);
     const timestamp = generatedAt.toISOString();
     const skipped: SkippedBill[] = [];
     const rows: (Record<string, unknown> & { _reading_id?: string | null })[] = [];
@@ -168,6 +165,13 @@ export async function POST(request: NextRequest) {
         return;
       }
 
+      let dueDate: string;
+      try {
+        dueDate = rentDueDate(text(admission.admission_date), billingMonth);
+      } catch {
+        skipped.push({ admissionId, residentName, reason: "Invalid admission date or billing month before admission." });
+        return;
+      }
       const rent =
         amount(admission.monthly_rent) || contractRentByAdmission.get(admissionId) || 0;
       if (rent <= 0) {
@@ -212,7 +216,7 @@ export async function POST(request: NextRequest) {
         balance_amount: totalBillAmount,
         due_date: dueDate,
         bill_status: PENDING_APPROVAL,
-        notes: `Bulk generated on ${timestamp.slice(0, 10)} by ${staff.email}. Due ${BILL_APPROVAL_DUE_DAYS} days from generation.${meterCharge > 0 ? ` Includes electricity meter charges: Rs ${meterCharge.toLocaleString()}.` : ""}`,
+        notes: `Bulk generated on ${timestamp.slice(0, 10)} by ${staff.email}. Admission-cycle due date ${dueDate}.${meterCharge > 0 ? ` Includes electricity meter charges: Rs ${meterCharge.toLocaleString()}.` : ""}`,
         created_at: timestamp,
         updated_at: timestamp,
         _reading_id: matchedReadingId,
@@ -222,7 +226,6 @@ export async function POST(request: NextRequest) {
     if (rows.length === 0) {
       return apiJson({
         billingMonth,
-        dueDate,
         created: [],
         createdCount: 0,
         skipped,
@@ -287,7 +290,6 @@ export async function POST(request: NextRequest) {
 
     return apiJson({
       billingMonth,
-      dueDate,
       created: created ?? [],
       createdCount: created?.length ?? 0,
       skipped,

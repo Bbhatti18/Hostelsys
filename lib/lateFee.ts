@@ -26,7 +26,7 @@ function utcDayNumber(year: number, month: number, day: number) {
 /**
  * Hostel late-fee rule:
  * Preview only; the database validates eligibility, payments and waivers.
- * Five inclusive due-cycle days are free; day six includes those grace days.
+ * Calendar days 1-5 defer the current month's charge; day six includes them.
  * Only a next actual rent bill establishes an exclusive cycle boundary.
  */
 export function calculateLateFee(
@@ -36,16 +36,17 @@ export function calculateLateFee(
 ) {
   const bill = parseDateOnly(dateOnly(dueDate));
   const current = parseDateOnly(dateOnly(asOf));
-  const startNo = utcDayNumber(bill.year, bill.month, bill.day);
+  const dueNo = utcDayNumber(bill.year, bill.month, bill.day);
+  const startNo = Math.max(dueNo + 1, utcDayNumber(current.year, current.month, 1));
   const currentNo = utcDayNumber(current.year, current.month, current.day);
   let endNo = currentNo + 1;
   if (nextDueDate) {
     const next = parseDateOnly(dateOnly(nextDueDate));
     const nextNo = utcDayNumber(next.year, next.month, next.day);
-    if (nextNo > startNo) endNo = Math.min(endNo, nextNo);
+    if (nextNo > dueNo) endNo = Math.min(endNo, nextNo);
   }
   const days = Math.max(0, Math.min(currentNo, endNo - 1) - startNo + 1);
-  return days <= LATE_FEE_GRACE_LAST_DAY ? 0 : days * LATE_FEE_DAILY_RATE;
+  return current.day <= LATE_FEE_GRACE_LAST_DAY ? 0 : days * LATE_FEE_DAILY_RATE;
 }
 
 export function lateFeePayable(

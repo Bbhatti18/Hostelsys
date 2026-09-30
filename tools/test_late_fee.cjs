@@ -13,14 +13,16 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync('lib/lateFee.ts','utf8'), 
 }).outputText,{module:mod,exports:mod.exports,require,Intl,Date});
 const {calculateLateFee,lateFeePayable}=mod.exports;
 const cases = [
- ['2026-09-01','2026-09-01',0],['2026-09-01','2026-09-05',0],
- ['2026-09-01','2026-09-06',1800],['2026-09-01','2026-09-07',2100],['2026-09-01','2026-09-10',3000],
- ['2026-09-10','2026-09-01',0],['2026-09-10','2026-09-10',0],['2026-09-10','2026-09-14',0],
- ['2026-09-10','2026-09-15',1800],['2026-09-10','2027-12-15',138600],
- ['2026-01-31','2026-03-15',13200],['2028-01-31','2028-03-15',13500]
+ ...[1,2,3,4,5].map(day=>['2026-08-20', '2026-09-0'+day, 0]),
+ ['2026-08-20','2026-09-06',1800],['2026-08-20','2026-09-07',2100],['2026-08-20','2026-09-10',3000],
+ ['2026-09-01','2026-09-06',1500],['2026-09-10','2026-09-06',0],
+ ['2026-09-10','2026-09-10',0],['2026-09-10','2026-09-11',300],
+ ['2026-09-10','2026-09-14',1200],['2026-09-10','2026-09-15',1500],
+ ['2026-09-10','2027-12-15',4500],['2026-01-31','2026-03-15',4500],
+ ['2028-01-31','2028-03-15',4500]
 ];
 for(const [due,day,expected] of cases) assert.equal(calculateLateFee(due,day),expected);
-assert.equal(calculateLateFee('2026-09-10','2026-10-20','2026-10-01'),6300);
+assert.equal(calculateLateFee('2026-09-10','2026-10-20','2026-10-01'),0);
 assert.equal(lateFeePayable(3000,0,2100),2100);
 assert.equal(lateFeePayable(2100,1000,2100),1100);
 assert.equal(lateFeePayable(2100,2100,2100),0);
@@ -29,7 +31,7 @@ assert.equal(lateFeePayable(2100,1000,null,1100),0);
 (async()=>{
  const db=new PGlite();
  try {
- await db.exec(`create role anon; create role authenticated; create role service_role bypassrls;
+ await db.exec(`create or replace function pg_catalog.now() returns timestamptz language sql stable as $$ select '2026-09-30 07:00:00+00'::timestamptz $$; create role anon; create role authenticated; create role service_role bypassrls;
  create schema auth; create table auth.users(id uuid primary key, email text);
  create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims',true),''),'{}')::jsonb $$;
  create function auth.uid() returns uuid language sql stable as $$ select (auth.jwt()->>'sub')::uuid $$;
@@ -57,7 +59,7 @@ assert.equal(lateFeePayable(2100,1000,null,1100),0);
    await db.query(`insert into admissions(id,resident_id,room_id,bed_id,admission_date,monthly_rent,security_deposit,status)
      values($1,$2,$3,$4,((now() at time zone 'Asia/Karachi')::date - 10),10000,5000,'Active')`,[a,r,room,bed]);
    await db.query(`insert into bills(id,bill_number,resident_id,admission_id,billing_month,rent_amount,total_amount,due_date,bill_status)
-     values($1::uuid,$1::uuid::text,$2,$3,'2026-09',10000,10000,((now() at time zone 'Asia/Karachi')::date - $4::integer),$5)`,[b,r,a,options.days??6,options.status??'Pending']);
+     values($1::uuid,$1::uuid::text,$2,$3,'2026-09',10000,10000,((now() at time zone 'Asia/Karachi')::date - $4::integer),$5)`,[b,r,a,options.days??7,options.status??'Pending']);
    await db.query(`insert into bills(id,bill_number,resident_id,admission_id,billing_month,bill_type,total_amount,due_date)
      values($1::uuid,$1::uuid::text,$2,$3,'Security Deposit','Security Deposit',5000,((now() at time zone 'Asia/Karachi')::date - 6))`,[d,r,a]);
    return {r,a,b,d};
@@ -217,15 +219,15 @@ assert.equal(lateFeePayable(2100,1000,null,1100),0);
  await fails('delete from late_fee_history where late_fee_id=$1',[(await fee(w.b)).id],/cannot be changed/);
  // Actual next-bill boundary, not an anniversary (including January 31).
  for (const [due,asof,next,expected] of [
-   ['2026-09-10','2026-10-20','2026-10-01',6300],
-   ['2026-01-31','2026-03-15','2026-02-28',8400],
-   ['2026-01-31','2026-03-15','2026-03-10',11400],
+   ['2026-09-10','2026-10-20','2026-10-01',0],
+   ['2026-01-31','2026-03-15','2026-02-28',0],
+   ['2026-01-31','2026-03-15','2026-03-10',2700],
  ]) {
    assert.equal(calculateLateFee(due,asof,next),expected);
    assert.equal(Number((await one('select public.calculate_rent_late_fee($1,$2,$3) as amount',[due,asof,next])).amount),expected);
  }
  async function oldCycle() {
-   const f=await fixture({days:20});
+   const f=await fixture({days:21});
    await db.query("update admissions set admission_date=(now() at time zone 'Asia/Karachi')::date-40 where id=$1",[f.a]);
    return f;
  }

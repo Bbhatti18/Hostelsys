@@ -388,9 +388,9 @@ async function main() {
             `bill_status=${bill.bill_status}`,
           );
           check(
-            "Due date is exactly 5 days from generation",
-            String(bill.due_date).slice(0, 10) === addDays(5),
-            `due_date=${bill.due_date}, expected=${addDays(5)}`,
+            "Initial Rent is due on admission",
+            String(bill.due_date).slice(0, 10) === new Date().toISOString().slice(0, 10),
+            `due_date=${bill.due_date}, expected=${new Date().toISOString().slice(0, 10)}`,
           );
           check(
             "Rent is pulled from the active admission",

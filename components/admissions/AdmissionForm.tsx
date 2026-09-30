@@ -690,7 +690,7 @@ export default function AdmissionForm({
           resident_id: residentId,
           admission_id: admissionData.id,
           billing_month: admissionMonth,
-          due_date: new Date(new Date(admissionDate).setDate(new Date(admissionDate).getDate() + 5)).toISOString().split("T")[0],
+          due_date: admissionDate,
           rent_amount: initialRent,
           total_amount: initialRent,
           balance_amount: initialRent,
