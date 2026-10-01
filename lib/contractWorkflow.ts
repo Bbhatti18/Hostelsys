@@ -93,3 +93,28 @@ export function isAdmissionReadyForActivation(
 ) {
   return contract?.status === "Pending Signature" && (depositStatus === "not_required" || isDepositVerified(depositStatus)) && isContractSignedAndAccepted(contract);
 }
+
+/** Shared read-only Ready predicate; staff authorization remains in the action. */
+export function isAdmissionActivationReady({
+  admission, resident, room, bed, contract, depositState, admissions,
+}: {
+  admission: DepositRow;
+  resident: DepositRow | null | undefined;
+  room: DepositRow | null | undefined;
+  bed: DepositRow | null | undefined;
+  contract: (ContractReadinessRecord & { admission_id?: unknown }) | null | undefined;
+  depositState: DepositState;
+  admissions: DepositRow[];
+}) {
+  return Boolean(
+    admission.id && admission.status === "Pending" &&
+    resident?.id && resident.id === admission.resident_id && resident.status !== "Archived" &&
+    room?.id && room.id === admission.room_id &&
+    ["Available", "Partially Occupied", "Occupied"].includes(String(room.status)) &&
+    bed?.id && bed.id === admission.bed_id && bed.room_id === room.id && bed.status === "Occupied" &&
+    contract?.admission_id === admission.id &&
+    isAdmissionReadyForActivation(depositState, contract) &&
+    !admissions.some(other => other.id !== admission.id && other.bed_id === admission.bed_id &&
+      ["Pending", "Active"].includes(String(other.status))),
+  );
+}

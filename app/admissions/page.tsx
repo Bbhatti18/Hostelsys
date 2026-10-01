@@ -16,7 +16,7 @@ import {
   normalizeBedLabel,
 } from "@/lib/bedLabels";
 import {
-  isAdmissionReadyForActivation,
+  isAdmissionActivationReady,
   isContractSignedAndAccepted,
   getAdmissionDeposit,
   depositStateLabel,
@@ -809,6 +809,10 @@ export default function AdmissionsPage() {
         throw new Error("The assigned bed belongs to another current admission.");
       }
 
+      // The live conflict query above succeeded and found no other current occupant.
+      if (!isAdmissionActivationReady({ ...context, depositState: deposit.state, admissions: [] })) {
+        throw new Error("This admission no longer meets the activation prerequisites. Please refresh.");
+      }
       const previousContractStatus = context.contract.status;
       let contractActivation = supabase
         .from("contracts")
@@ -1558,7 +1562,7 @@ export default function AdmissionsPage() {
                     "Resident",
                     "Room / Bed",
                     "Dates",
-                    "Rent / Deposit Verified",
+                    "Rent / Deposit",
                     "Contract Signed",
                     "Ready",
                     "Status",
@@ -1634,21 +1638,10 @@ const contractSignatureLabel = contractSigned
         : "No";
 
 const deposit = getAdmissionDeposit(admission, depositBills, depositPayments);
-                    const hasAllocationConflict = admissions.some(
-                      (item) =>
-                        item.id !== admission.id &&
-                        item.bed_id === admission.bed_id &&
-                        isCurrentAdmissionStatus(item.status),
-                    );
-                    const readyForActivation =
-                      isAdmissionReadyForActivation(
-                        deposit.state,
-                        contract,
-                      ) &&
-                      resident?.status !== "Archived" &&
-                      Boolean(room && isAdmissionRoomStatus(room.status)) &&
-                      bed?.status === BED_STATUS.OCCUPIED &&
-                      !hasAllocationConflict;
+                    const readyForActivation = isAdmissionActivationReady({
+                      admission, resident, room, bed, contract,
+                      depositState: deposit.state, admissions,
+                    });
 
                     return (
                       <tr

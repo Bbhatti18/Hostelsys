@@ -1,5 +1,5 @@
 import { validDate } from "@/lib/canonical";
-import { getAdmissionDeposit, isAdmissionReadyForActivation, isContractSignedAndAccepted } from "@/lib/contractWorkflow";
+import { getAdmissionDeposit, isAdmissionActivationReady, isContractSignedAndAccepted } from "@/lib/contractWorkflow";
 import { deriveBillStatus, roundMoney } from "@/lib/financialMath";
 import { paymentBillAmounts } from "@/lib/paymentAllocations";
 import { buildDashboardRent, currentPayableDashboardBills, dashboardPayments, karachiCalendarDate } from "./dashboardRent";
@@ -129,24 +129,12 @@ export function buildDashboardSummary(data: DashboardData, now = new Date()) {
     const room = roomsById.get(text(admission.room_id));
     const bed = bedsById.get(text(admission.bed_id));
     const resident = residentsById.get(text(admission.resident_id));
-    const allocationConflict = pendingAdmissions.some(
-      (other) =>
-        text(other.id) !== text(admission.id) &&
-        text(other.bed_id) === text(admission.bed_id),
-    ) || data.admissions.some(
-      (other) =>
-        normalized(other.status) === "active" &&
-        text(other.bed_id) === text(admission.bed_id),
-    );
-    return isAdmissionReadyForActivation(
-      getAdmissionDeposit(admission, data.bills, data.payments).state,
-      contractsByAdmission.get(text(admission.id)),
-    ) &&
-      normalized(resident?.status) !== "archived" &&
-      ["available", "partially occupied", "occupied"].includes(normalized(room?.status)) &&
-      normalized(bed?.status) === "occupied" &&
-      text(bed?.room_id) === text(admission.room_id) &&
-      !allocationConflict;
+    return isAdmissionActivationReady({
+      admission, resident, room, bed,
+      contract: contractsByAdmission.get(text(admission.id)),
+      depositState: getAdmissionDeposit(admission, data.bills, data.payments).state,
+      admissions: data.admissions,
+    });
   });
   const blockedByContractApproval = pendingAdmissions.filter((admission) => {
     const contract = contractsByAdmission.get(text(admission.id));
