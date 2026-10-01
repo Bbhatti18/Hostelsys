@@ -18,7 +18,8 @@ import {
 import {
   isAdmissionReadyForActivation,
   isContractSignedAndAccepted,
-  isDepositVerified,
+  getAdmissionDeposit,
+  depositStateLabel,
 } from "@/lib/contractWorkflow";
 import { supabase } from "@/lib/supabase";
 import { getSupabaseErrorMessage } from "@/lib/supabaseErrors";
@@ -128,8 +129,9 @@ function admissionStatusClass(status: AdmissionStatus) {
   return "bg-red-100 text-red-700";
 }
 
-function depositStatusClass(status: DepositStatus) {
-  if (status === "Held") return "bg-emerald-100 text-emerald-700";
+function depositStatusClass(status: string) {
+  if (status === "verified") return "bg-emerald-100 text-emerald-700";
+  if (status === "not_required") return "bg-slate-100 text-slate-600";
   if (status === "Released") return "bg-blue-100 text-blue-700";
   if (status === "Deducted") return "bg-red-100 text-red-700";
   return "bg-amber-100 text-amber-700";
@@ -149,6 +151,9 @@ export default function AdmissionsPage() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [beds, setBeds] = useState<Bed[]>([]);
   const [contracts, setContracts] = useState<AdmissionContract[]>([]);
+
+  const [depositBills, setDepositBills] = useState<Record<string, unknown>[] | undefined>();
+  const [depositPayments, setDepositPayments] = useState<Record<string, unknown>[] | undefined>();
 
   const [form, setForm] = useState<AdmissionForm>(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -176,6 +181,8 @@ export default function AdmissionsPage() {
       { data: roomsData, error: roomsError },
       { data: bedsData, error: bedsError },
       { data: contractsData, error: contractsError },
+      billsResult,
+      paymentsResult,
     ] = await Promise.all([
       supabase
         .from("admissions")
@@ -199,10 +206,12 @@ export default function AdmissionsPage() {
           "id, admission_id, status, resident_signature_url, resident_signature_status, signed_by_resident, signed_at, contract_content",
         )
         .order("created_at", { ascending: false }),
+      supabase.from("bills").select("id, resident_id, admission_id, bill_type, bill_status, total_amount").eq("bill_type", "Security Deposit"),
+      supabase.from("payments").select("id, resident_id, bill_id, amount, payment_status, payment_allocations(bill_id, amount)"),
     ]);
 
     const firstError =
-      admissionsError || residentsError || roomsError || bedsError || contractsError;
+      admissionsError || residentsError || roomsError || bedsError || contractsError || billsResult.error || paymentsResult.error;
 
     if (firstError) {
       setError(
@@ -213,6 +222,8 @@ export default function AdmissionsPage() {
       );
     }
 
+    setDepositBills(billsResult.error ? undefined : billsResult.data ?? []);
+    setDepositPayments(paymentsResult.error ? undefined : paymentsResult.data ?? []);
     setAdmissions((admissionsData ?? []) as Admission[]);
     setResidents((residentsData ?? []) as Resident[]);
     setRooms((roomsData ?? []) as Room[]);
@@ -307,10 +318,10 @@ export default function AdmissionsPage() {
       pending: admissions.filter((item) => item.status === "Pending")
         .length,
       depositsHeld: admissions.filter(
-        (item) => item.deposit_status === "Held"
+        (item) => getAdmissionDeposit(item, depositBills, depositPayments).state === "verified"
       ).length,
     }),
-    [admissions]
+    [admissions, depositBills, depositPayments]
   );
 
   function updateField<K extends keyof AdmissionForm>(
@@ -660,7 +671,7 @@ export default function AdmissionsPage() {
       const { data: admission, error: admissionError } = await supabase
         .from("admissions")
         .select(
-          "id, resident_id, room_id, bed_id, status, deposit_status, actual_leaving_date",
+          "id, resident_id, room_id, bed_id, status, deposit_status, security_deposit, actual_leaving_date",
         )
       .eq("id", admissionId)
       .maybeSingle();
@@ -755,8 +766,14 @@ export default function AdmissionsPage() {
       if (!isAdmissionRoomStatus(context.room.status)) {
         throw new Error("The assigned room is no longer operational.");
       }
-      if (!isDepositVerified(context.admission.deposit_status)) {
-        throw new Error("The deposit must be Held before activation.");
+      const [billsResult, paymentsResult] = await Promise.all([
+        supabase.from("bills").select("id, resident_id, admission_id, bill_type, bill_status, total_amount").eq("admission_id", context.admission.id).eq("bill_type", "Security Deposit"),
+        supabase.from("payments").select("id, resident_id, bill_id, amount, payment_status, payment_allocations(bill_id, amount)").eq("resident_id", context.admission.resident_id),
+      ]);
+      if (billsResult.error || paymentsResult.error) throw new Error("Unable to verify the admission deposit evidence.");
+      const deposit = getAdmissionDeposit(context.admission, billsResult.data ?? [], paymentsResult.data ?? []);
+      if (deposit.state === "pending") {
+        throw new Error("The required deposit must be fully verified before activation.");
       }
       if (!context.contract) {
         throw new Error("A contract linked to this admission is required before activation.");
@@ -834,7 +851,8 @@ export default function AdmissionsPage() {
         .eq("resident_id", context.admission.resident_id)
         .eq("room_id", context.admission.room_id)
         .eq("bed_id", context.admission.bed_id)
-        .eq("deposit_status", "Held")
+        .eq("deposit_status", deposit.state === "verified" ? "Held" : context.admission.deposit_status)
+        .eq("security_deposit", context.admission.security_deposit)
         .eq("status", "Pending")
         .select("id")
         .maybeSingle();
@@ -903,7 +921,9 @@ export default function AdmissionsPage() {
         );
       }
 
-      setMessage("Contract and deposit verified. Admission activated successfully.");
+      setMessage(deposit.state === "not_required"
+        ? "Contract verified; no deposit required. Admission activated successfully."
+        : "Contract and deposit verified. Admission activated successfully.");
       await refresh();
       setAdmissionDataVersion((current) => current + 1);
     } catch (activationError) {
@@ -1008,7 +1028,7 @@ export default function AdmissionsPage() {
         currentContract.id,
       );
       setMessage(
-        admission.deposit_status === "Held"
+        getAdmissionDeposit(admissions.find(item => item.id === admission.id), depositBills, depositPayments).state !== "pending"
           ? `Resident signature approved. Admission is ready when its allocation is valid; use Activate Admission as a separate admin action.${notificationWarning(notificationResult)}`
           : `Resident signature approved. Admission remains Pending until the security deposit receipt is verified, then requires separate admin activation.${notificationWarning(notificationResult)}`,
       );
@@ -1613,9 +1633,7 @@ const contractSignatureLabel = contractSigned
         ? "Re-sign Required"
         : "No";
 
-const depositVerified = isDepositVerified(
-  admission.deposit_status,
-);
+const deposit = getAdmissionDeposit(admission, depositBills, depositPayments);
                     const hasAllocationConflict = admissions.some(
                       (item) =>
                         item.id !== admission.id &&
@@ -1624,7 +1642,7 @@ const depositVerified = isDepositVerified(
                     );
                     const readyForActivation =
                       isAdmissionReadyForActivation(
-                        admission.deposit_status,
+                        deposit.state,
                         contract,
                       ) &&
                       resident?.status !== "Archived" &&
@@ -1663,15 +1681,15 @@ const depositVerified = isDepositVerified(
   <p>Rent: {money(admission.monthly_rent)}</p>
 
   <p className="mt-1 text-xs text-slate-500">
-    Deposit: {money(admission.security_deposit)}
+    Deposit: {money(deposit.required)}
   </p>
 
   <span
     className={`mt-2 inline-flex rounded-full px-3 py-1 text-xs font-bold ${depositStatusClass(
-      admission.deposit_status
+      deposit.state
     )}`}
   >
-    Deposit {depositVerified ? "Verified" : admission.deposit_status}
+    {depositStateLabel(deposit.state)}
   </span>
 </td>
 
@@ -1741,7 +1759,7 @@ const depositVerified = isDepositVerified(
                                 )}
 
                               {admission.status === "Pending" &&
-                                !depositVerified && (
+                                deposit.state === "pending" && (
                                   <Link
                                     href="/payment-verification"
                                     className="rounded-lg border border-amber-200 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-50"

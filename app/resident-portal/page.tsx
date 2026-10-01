@@ -10,7 +10,8 @@ import { supabase } from "@/lib/supabase";
 import { normalizeBedLabel } from "@/lib/bedLabels";
 import {
   isContractSignedAndAccepted,
-  isDepositVerified,
+  getAdmissionDeposit,
+  depositStateLabel,
 } from "@/lib/contractWorkflow";
 import { resolveAuthenticatedResident } from "@/lib/residentPortalAuth";
 import { loadResidentPortalData } from "@/lib/residentPortalData";
@@ -224,7 +225,7 @@ export default function ResidentPortalPage() {
   const admissionStatus = firstText(admission, ["status"]);
   const hasActiveAdmission = admissionStatus === "Active";
   const contractSigned = Boolean(firstText(contract, ["resident_signature_url"]));
-  const depositVerified = isDepositVerified(firstText(admission, ["deposit_status"]));
+  const deposit = getAdmissionDeposit(admission, bills, payments);
   const portalTabs: PortalTab[] = hasActiveAdmission
     ? ["Overview", "Profile", "Room", "Contract", "Payments", "Notices", "Inspections", "Maintenance"]
     : ["Overview", "Profile", "Contract", "Payments", "Notices"];
@@ -383,12 +384,12 @@ export default function ResidentPortalPage() {
                     items={[
                       ["Admission Status", admissionStatus || "Pending"],
                       ["Contract", contractSigned ? "Signed" : "Unsigned"],
-                      ["Deposit Verification", depositVerified ? "Verified" : "Pending"],
+                      ["Security Deposit", depositStateLabel(deposit.state)],
                       ["Overall Status", "Awaiting Admin Activation"],
                     ]}
                   />
                   <p className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-                    Your admission is awaiting contract signing, deposit verification, and admin activation.
+                    Your admission requires an approved signature, satisfaction of any required deposit, and admin activation.
                   </p>
                 </Card>
               )}

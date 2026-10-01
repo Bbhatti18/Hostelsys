@@ -119,9 +119,9 @@ assert.equal(bigintId("9007199254740993"), "9007199254740993");
 assert.throws(() => bigintId(9007199254740993));
 const workflow = load("contractWorkflow");
 const signed = { contract_content: "Agreed", resident_signature_url: "proof", resident_signature_status: "Submitted", signed_by_resident: true, signed_at: "2026-09-01" };
-assert.equal(workflow.isAdmissionReadyForActivation("Held", signed), false);
-assert.equal(workflow.isAdmissionReadyForActivation("Pending", { ...signed, resident_signature_status: "Approved" }), false);
-assert.equal(workflow.isAdmissionReadyForActivation("Held", { ...signed, status: "Pending Signature", resident_signature_status: "Approved" }), true);
+assert.equal(workflow.isAdmissionReadyForActivation("verified", signed), false);
+assert.equal(workflow.isAdmissionReadyForActivation("pending", { ...signed, resident_signature_status: "Approved" }), false);
+assert.equal(workflow.isAdmissionReadyForActivation("verified", { ...signed, status: "Pending Signature", resident_signature_status: "Approved" }), true);
 const { isNoticeVisibleToResident, compareNoticeProminence } = load("noticeVisibility");
 const notice = { id: 1, audience: "All Residents", status: "Published", publish_date: "2026-09-01" };
 assert.equal(isNoticeVisibleToResident(notice, "resident", "room", "2026-09-21"), true);
@@ -131,4 +131,44 @@ assert.equal(isNoticeVisibleToResident({ ...notice, audience: "Selected Resident
 assert.equal(compareNoticeProminence({ ...notice, id: 2 }, { ...notice, id: 10 }) > 0, true);
 console.log("PASS month, bigint, lifecycle and notice checks");
 
+}
+
+// Deposit readiness must distinguish absent obligations from actual verification.
+{
+const workflow = load("contractWorkflow");
+const zeroAdmission = { id: 'current', resident_id: 'resident', status: 'Pending', security_deposit: 0, deposit_status: 'Held' };
+const depositAdmission = { ...zeroAdmission, security_deposit: 17000 };
+const depositBill = { id: 'deposit-current', resident_id: 'resident', admission_id: 'current', bill_type: 'Security Deposit', total_amount: 17000, bill_status: 'Pending' };
+const approvedContract = { status: 'Pending Signature', resident_signature_url: 'local-signature', resident_signature_status: 'Approved', signed_by_resident: true, signed_at: '2026-10-01', contract_content: 'Terms' };
+const state = (admission, bills, payments) => workflow.getAdmissionDeposit(admission, bills, payments).state;
+const payment = (status, amount = 17000) => ({resident_id:'resident',bill_id:'deposit-current',payment_status:status,amount});
+assert.equal(state(zeroAdmission, [], []), 'not_required');
+assert.equal(workflow.depositStateLabel('not_required'), 'No Deposit Required');
+assert.equal(workflow.isDepositVerified('not_required'), false);
+assert.equal(workflow.isAdmissionReadyForActivation('not_required', approvedContract), true);
+assert.equal(workflow.isAdmissionReadyForActivation('not_required', {...approvedContract,resident_signature_status:'Submitted'}), false);
+assert.equal(workflow.isAdmissionReadyForActivation('not_required', null), false);
+assert.equal(state(depositAdmission, [], []), 'pending', 'Held alone is not payment evidence');
+assert.equal(state(depositAdmission, [depositBill], []), 'pending');
+for(const status of ['Pending','Rejected','Cancelled']) assert.equal(state(depositAdmission, [depositBill], [payment(status)]), 'pending');
+assert.equal(state(depositAdmission, [depositBill], [payment('Verified', 1000)]), 'pending');
+assert.equal(state(depositAdmission, [depositBill], [payment('Verified')]), 'verified');
+assert.equal(state(zeroAdmission, [depositBill], []), 'pending', 'Real positive bill overrides zero admission amount');
+assert.equal(state(depositAdmission, [{...depositBill,total_amount:0}], []), 'pending', 'Zero bill cannot erase positive required deposit');
+assert.equal(state(depositAdmission, [{...depositBill,admission_id:'old'}], [payment('Verified')]), 'pending');
+assert.equal(state(depositAdmission, [depositBill], [{...payment('Verified'),resident_id:'other'}]), 'pending');
+assert.equal(state(depositAdmission, [depositBill], [{...payment('Verified'),bill_id:'old-deposit'}]), 'pending');
+for(const field of ['allocations','payment_allocations']) {
+ assert.equal(state(depositAdmission, [depositBill], [{...payment('Verified'),bill_id:null,[field]:[{bill_id:'deposit-current',amount:17000}]}]), 'verified');
+ assert.equal(state(depositAdmission, [depositBill], [{...payment('Verified'),[field]:[{bill_id:'old-deposit',amount:17000}]}]), 'pending', 'Allocations supersede direct bill fallback');
+}
+assert.equal(state(zeroAdmission, undefined, []), 'pending', 'Missing data fails closed');
+assert.equal(state({...zeroAdmission,security_deposit:undefined}, [], []), 'pending');
+assert.equal(state({...zeroAdmission,security_deposit:''}, [], []), 'pending');
+for(const bill_status of ['Draft','Pending Approval','Cancelled']) assert.equal(state(depositAdmission, [{...depositBill,bill_status}], [payment('Verified')]), 'pending');
+const frozenAdmission = Object.freeze({...zeroAdmission});
+const frozenBills = Object.freeze([]), frozenPayments = Object.freeze([]);
+assert.equal(state(frozenAdmission, frozenBills, frozenPayments), 'not_required');
+assert.equal(frozenPayments.length,0); assert.equal(frozenAdmission.deposit_status,'Held');
+console.log('PASS deposit state/readiness: intentional zero, unpaid, nonverified, partial/full verified, allocation precedence, old/different admission isolation, missing data, contract guards, and no mutations.');
 }

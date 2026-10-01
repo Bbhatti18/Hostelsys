@@ -1,5 +1,5 @@
 import { validDate } from "@/lib/canonical";
-import { isAdmissionReadyForActivation, isContractSignedAndAccepted } from "@/lib/contractWorkflow";
+import { getAdmissionDeposit, isAdmissionReadyForActivation, isContractSignedAndAccepted } from "@/lib/contractWorkflow";
 import { deriveBillStatus, roundMoney } from "@/lib/financials";
 import { paymentBillAmounts } from "@/lib/paymentAllocations";
 
@@ -125,7 +125,7 @@ export function buildDashboardSummary(data: DashboardData, now = new Date()) {
     (admission) => normalized(admission.status) === "pending",
   );
   const pendingDeposits = pendingAdmissions.filter(
-    (admission) => normalized(admission.deposit_status) === "pending",
+    (admission) => getAdmissionDeposit(admission, data.bills, data.payments).state === "pending",
   );
   const readyForActivation = pendingAdmissions.filter((admission) => {
     const room = roomsById.get(text(admission.room_id));
@@ -141,7 +141,7 @@ export function buildDashboardSummary(data: DashboardData, now = new Date()) {
         text(other.bed_id) === text(admission.bed_id),
     );
     return isAdmissionReadyForActivation(
-      text(admission.deposit_status),
+      getAdmissionDeposit(admission, data.bills, data.payments).state,
       contractsByAdmission.get(text(admission.id)),
     ) &&
       normalized(resident?.status) !== "archived" &&
@@ -153,7 +153,7 @@ export function buildDashboardSummary(data: DashboardData, now = new Date()) {
   const blockedByContractApproval = pendingAdmissions.filter((admission) => {
     const contract = contractsByAdmission.get(text(admission.id));
     return (
-      normalized(admission.deposit_status) === "held" &&
+      getAdmissionDeposit(admission, data.bills, data.payments).state !== "pending" &&
       Boolean(contract) &&
       ["submitted", "signed"].includes(
         normalized(contract?.resident_signature_status),

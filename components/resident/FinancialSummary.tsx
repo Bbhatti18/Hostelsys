@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getAdmissionDeposit, depositStateLabel } from "@/lib/contractWorkflow";
 import { useMemo } from "react";
 import { buildResidentFinancialSummary, type FinancialLineItem, type FinancialRow } from "@/lib/residentFinancialSummary";
 
@@ -16,7 +17,8 @@ function tone(status: string) {
   const normalized = status.trim().toLowerCase();
   if (["paid", "held", "verified"].includes(normalized)) return "bg-emerald-100 text-emerald-700";
   if (normalized === "overdue") return "bg-red-100 text-red-700";
-  if (normalized === "not billed" || normalized === "not required") return "bg-slate-100 text-slate-600";
+  if (normalized === "not billed" || normalized === "not required" || normalized === "no deposit required") return "bg-slate-100 text-slate-600";
+  if (normalized === "deposit verified") return "bg-emerald-100 text-emerald-700";
   return "bg-amber-100 text-amber-700";
 }
 
@@ -44,7 +46,7 @@ export default function FinancialSummary({ admission, room, bed, bills, payments
           <OverviewCard title="Monthly Rent" status={summary.rentStatus}>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total outstanding rent</p><Amount value={summary.monthlyRentDue} /><div className="grid grid-cols-1 gap-3 sm:grid-cols-3"><MiniValue label="Original rent" value={money(summary.rentCharges)} /><MiniValue label="Verified paid" value={money(summary.rentPaid)} /><MiniValue label="Balance" value={money(summary.monthlyRentDue)} /></div><Detail label="Current monthly rate" value={money(summary.monthlyRent)} /><Detail label="Earliest unpaid due date" value={summary.rentDueDate ? dateLabel(summary.rentDueDate) : summary.rentStatus === "Not Billed" ? "Not billed yet" : "No rent due"} />
           </OverviewCard>
-          <OverviewCard title="Security Deposit" status={summary.depositStatus}>
+          <OverviewCard title="Security Deposit" status={depositStateLabel(getAdmissionDeposit(admission, bills, payments).state)}>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3"><MiniValue label="Required" value={money(summary.depositRequired)} /><MiniValue label="Paid" value={money(summary.depositPaid)} /><MiniValue label="Remaining" value={money(summary.depositBalance)} /></div>
           </OverviewCard>
         </div>
