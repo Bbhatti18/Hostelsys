@@ -12,6 +12,7 @@ import {
   type BedCapacityResult,
 } from "@/lib/bedProvisioning";
 import { getSupabaseErrorMessage } from "@/lib/supabaseErrors";
+import { buildRoomOccupancy, currentBedAssignments, matchesRoomStatus, summarizeRoomOccupancy, type OccupancyAdmission } from "@/lib/roomOccupancy";
 import { isOperationalBedStatus } from "@/lib/statuses";
 import { getNextCanonicalBedLabels, normalizeBedLabel } from "@/lib/bedLabels";
 
@@ -123,6 +124,7 @@ function roomToForm(room: Room): RoomForm {
 export default function RoomsPage() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [roomBeds, setRoomBeds] = useState<RoomBed[]>([]);
+  const [roomAdmissions, setRoomAdmissions] = useState<OccupancyAdmission[]>([]);
   const [referencedRoomIds, setReferencedRoomIds] = useState<Set<string>>(
     new Set(),
   );
@@ -204,18 +206,21 @@ export default function RoomsPage() {
           : "Unable to verify room relationships.",
       );
       setRoomBeds([]);
+      setRoomAdmissions([]);
       setReferencedRoomIds(new Set());
       setRelationshipsVerified(false);
     } else {
+      const assignments = currentBedAssignments(bedResult.data ?? [], admissionResult.data ?? []);
+      setRoomAdmissions(admissionResult.data ?? []);
       const occupantMap = new Map<string, BedResident>();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ((admissionResult.data ?? []) as any[]).forEach((adm) => {
-        if (adm.bed_id && adm.residents) {
+        if (adm.bed_id && assignments.get(adm.bed_id)?.id === adm.id) {
           occupantMap.set(adm.bed_id, {
             resident_id: adm.resident_id,
-            full_name: adm.residents.full_name || "Resident",
-            resident_code: adm.residents.resident_code || null,
-            phone: adm.residents.phone || null,
+            full_name: adm.residents?.full_name || "Resident",
+            resident_code: adm.residents?.resident_code || null,
+            phone: adm.residents?.phone || null,
             admission_date: adm.admission_date || null,
             status: adm.status || null,
           });
@@ -258,10 +263,15 @@ export default function RoomsPage() {
     void loadRooms();
   }, [loadRooms]);
 
+  const occupancy = useMemo(() => new Map(rooms.map(room => [room.id,
+    buildRoomOccupancy(room, roomBeds, roomAdmissions),
+  ])), [rooms, roomBeds, roomAdmissions]);
+
   const filteredRooms = useMemo(() => {
     const query = search.trim().toLowerCase();
 
     return rooms.filter((room) => {
+      if (String(room.status) === "Archived") return false;
       const matchesSearch =
         query === "" ||
         room.room_number.toLowerCase().includes(query) ||
@@ -269,21 +279,13 @@ export default function RoomsPage() {
         room.room_type.toLowerCase().includes(query);
 
       const matchesStatus =
-        statusFilter === "All" || room.status === statusFilter;
+        matchesRoomStatus(occupancy.get(room.id)!, statusFilter);
 
       return matchesSearch && matchesStatus;
     });
-  }, [rooms, search, statusFilter]);
+  }, [rooms, search, statusFilter, occupancy]);
 
-  const stats = useMemo(
-    () => ({
-      total: rooms.length,
-      available: rooms.filter((room) => room.status === "Available").length,
-      occupied: rooms.filter((room) => room.status === "Occupied").length,
-      maintenance: rooms.filter((room) => room.status === "Maintenance").length,
-    }),
-    [rooms]
-  );
+  const stats = useMemo(() => summarizeRoomOccupancy([...occupancy.values()]), [occupancy]);
 
   function updateField<K extends keyof RoomForm>(
     key: K,
@@ -832,10 +834,10 @@ export default function RoomsPage() {
         )}
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard label="Total Rooms" value={stats.total} />
-          <StatCard label="Available" value={stats.available} />
-          <StatCard label="Occupied" value={stats.occupied} />
-          <StatCard label="Maintenance" value={stats.maintenance} />
+          <StatCard label="Total Rooms" value={loading ? "..." : stats.total} />
+          <StatCard label="Available" value={loading || !relationshipsVerified ? "..." : stats.available} description="At least one assignable vacant bed" />
+          <StatCard label="Occupied" value={loading || !relationshipsVerified ? "..." : stats.occupied} description="At least one current occupied bed" />
+          <StatCard label="Maintenance" value={loading ? "..." : stats.maintenance} />
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -854,7 +856,7 @@ export default function RoomsPage() {
             >
               <option value="All">All Statuses</option>
               <option value="Available">Available</option>
-              <option value="Occupied">Occupied</option>
+              <option value="Fully Occupied">Fully Occupied</option>
               <option value="Partially Occupied">
                 Partially Occupied
               </option>
@@ -914,6 +916,8 @@ export default function RoomsPage() {
                       Loading rooms...
                     </td>
                   </tr>
+                ) : !relationshipsVerified ? (
+                  <tr><td colSpan={7} className="px-5 py-12 text-center text-sm text-red-700">Room occupancy could not be verified. Please reload before relying on availability.</td></tr>
                 ) : filteredRooms.length === 0 ? (
                   <tr>
                     <td
@@ -925,12 +929,9 @@ export default function RoomsPage() {
                   </tr>
                 ) : (
                   filteredRooms.map((room) => {
-                    const currentRoomBeds = roomBeds.filter(
-                      (b) => b.room_id === room.id,
-                    );
-                    const occupiedCount = currentRoomBeds.filter(
-                      (b) => b.status === "Occupied" || Boolean(b.resident),
-                    ).length;
+                    const roomOccupancy = occupancy.get(room.id)!;
+                    const currentRoomBeds = roomOccupancy.beds;
+                    const occupiedCount = roomOccupancy.occupied;
                     const isExpanded = expandedRoomIds.has(room.id);
 
                     return (
@@ -965,7 +966,7 @@ export default function RoomsPage() {
                           <td className="whitespace-nowrap px-5 py-4">
                             <div className="flex items-center gap-2">
                               <span className="text-sm font-bold text-slate-900">
-                                {occupiedCount} / {room.total_beds} Occupied
+                                {occupiedCount} / {roomOccupancy.capacity} Occupied
                               </span>
                               <button
                                 type="button"
@@ -980,19 +981,19 @@ export default function RoomsPage() {
                             {currentRoomBeds.length > 0 && (
                               <div className="mt-1.5 flex flex-wrap gap-1">
                                 {currentRoomBeds.map((bed) => {
-                                  const hasResident = Boolean(bed.resident);
+                                  const hasResident = bed.occupied;
                                   return (
                                     <span
                                       key={bed.id}
                                       title={
                                         hasResident
                                           ? `${normalizeBedLabel(bed.bed_number)}: Occupied by ${bed.resident?.full_name} (${bed.resident?.resident_code || "Active"})`
-                                          : `${normalizeBedLabel(bed.bed_number)}: ${bed.status}`
+                                          : `${normalizeBedLabel(bed.bed_number)}: ${bed.displayStatus}`
                                       }
                                       className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold ${
-                                        hasResident || bed.status === "Occupied"
+                                        bed.occupied
                                           ? "bg-blue-100 text-blue-800"
-                                          : "bg-emerald-100 text-emerald-800"
+                                          : bed.assignable ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"
                                       }`}
                                     >
                                       {normalizeBedLabel(bed.bed_number).replace(/^Bed\s+/i, "")}
@@ -1038,10 +1039,10 @@ export default function RoomsPage() {
                           <td className="whitespace-nowrap px-5 py-4">
                             <span
                               className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${statusClass(
-                                room.status,
+                                roomOccupancy.status,
                               )}`}
                             >
-                              {room.status}
+                              {roomOccupancy.status}
                             </span>
                           </td>
 
@@ -1079,19 +1080,15 @@ export default function RoomsPage() {
                                       Room {room.room_number} — Beds & Occupants
                                     </h4>
                                     <p className="mt-0.5 text-xs text-slate-500">
-                                      {currentRoomBeds.length} beds configured · {room.total_beds} room capacity
+                                      {roomOccupancy.capacity} active beds · {room.total_beds} configured capacity
                                     </p>
                                   </div>
                                   <div className="flex items-center gap-2">
                                     <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">
                                       {
-                                        currentRoomBeds.filter(
-                                          (b) =>
-                                            b.status === "Vacant" &&
-                                            !b.resident,
-                                        ).length
+                                        roomOccupancy.available
                                       }{" "}
-                                      Vacant
+                                      Assignable
                                     </span>
                                     <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700">
                                       {occupiedCount} Occupied
@@ -1116,16 +1113,14 @@ export default function RoomsPage() {
                                   <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                                     {currentRoomBeds.map((bed) => {
                                       const res = bed.resident;
-                                      const isOccupied =
-                                        bed.status === "Occupied" ||
-                                        Boolean(res);
+                                      const isOccupied = bed.occupied;
                                       return (
                                         <div
                                           key={bed.id}
                                           className={`rounded-xl border p-3 text-xs transition ${
                                             isOccupied
                                               ? "border-blue-200 bg-blue-50/40"
-                                              : "border-emerald-200 bg-emerald-50/40"
+                                              : bed.assignable ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200 bg-slate-50"
                                           }`}
                                         >
                                           <div className="flex items-center justify-between gap-2">
@@ -1136,12 +1131,10 @@ export default function RoomsPage() {
                                               className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
                                                 isOccupied
                                                   ? "bg-blue-100 text-blue-700"
-                                                  : "bg-emerald-100 text-emerald-700"
+                                                  : bed.assignable ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"
                                               }`}
                                             >
-                                              {isOccupied
-                                                ? "Occupied"
-                                                : "Vacant"}
+                                              {bed.displayStatus}
                                             </span>
                                           </div>
 
@@ -1183,7 +1176,7 @@ export default function RoomsPage() {
                                           ) : (
                                             <div className="mt-2.5 flex items-center justify-between gap-1 border-t border-emerald-100 pt-2">
                                               <span className="text-[11px] font-medium text-emerald-700">
-                                                ✓ Vacant
+                                                {bed.displayStatus}
                                               </span>
                                               <button
                                                 type="button"
@@ -1270,11 +1263,12 @@ function Checkbox({
   );
 }
 
-function StatCard({ label, value }: { label: string; value: number }) {
+function StatCard({ label, value, description }: { label: string; value: number | string; description?: string }) {
   return (
     <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <p className="text-sm font-medium text-slate-500">{label}</p>
       <p className="mt-2 text-3xl font-bold text-slate-900">{value}</p>
+      {description && <p className="mt-1 text-xs text-slate-500">{description}</p>}
     </article>
   );
 }
@@ -1287,11 +1281,11 @@ function Tag({ label }: { label: string }) {
   );
 }
 
-function statusClass(status: RoomStatus) {
+function statusClass(status: string) {
   switch (status) {
     case "Available":
       return "bg-emerald-100 text-emerald-700";
-    case "Occupied":
+    case "Fully Occupied":
       return "bg-red-100 text-red-700";
     case "Partially Occupied":
       return "bg-amber-100 text-amber-700";
