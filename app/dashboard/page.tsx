@@ -175,7 +175,7 @@ export default function DashboardPage() {
                   className="mt-6 rounded-2xl bg-white p-4 shadow-lg sm:p-6 dark:bg-slate-800">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div><h3 id="rent-due-today-heading" className="text-xl font-bold">Rent Due Today</h3>
-                      <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{summary.today} · Asia/Karachi · Refreshes every minute</p></div>
+                      <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{summary.today}</p></div>
                     <div className="flex gap-3">
                       <button type="button" disabled={loading} onClick={() => void loadDashboardData()} className="rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-50">Refresh</button>
                       <button type="button" onClick={() => setShowRentDueToday(false)} className="rounded-lg border px-3 py-2 text-sm font-semibold">Close</button>
