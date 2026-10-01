@@ -835,8 +835,8 @@ export default function RoomsPage() {
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard label="Total Rooms" value={loading ? "..." : stats.total} />
-          <StatCard label="Available" value={loading || !relationshipsVerified ? "..." : stats.available} description="At least one assignable vacant bed" />
-          <StatCard label="Occupied" value={loading || !relationshipsVerified ? "..." : stats.occupied} description="At least one current occupied bed" />
+          <StatCard label="Available" value={loading || !relationshipsVerified ? "..." : stats.available} />
+          <StatCard label="Occupied" value={loading || !relationshipsVerified ? "..." : stats.occupied} />
           <StatCard label="Maintenance" value={loading ? "..." : stats.maintenance} />
         </section>
 
