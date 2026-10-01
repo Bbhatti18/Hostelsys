@@ -159,7 +159,7 @@ export default function DashboardPage() {
                   className="rounded-2xl bg-white p-6 text-left text-slate-950 shadow-lg transition hover:-translate-y-1 hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-blue-200 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-blue-800">
                   <div className="text-4xl" aria-hidden="true">📅</div>
                   <h4 className="mt-4 text-xl font-bold">Rent Due Today ({loading ? "…" : error ? "Unavailable" : summary.rentDueToday.length})</h4>
-                  <p className="mt-2 text-sm text-gray-600 dark:text-slate-300">View outstanding rent due today in Asia/Karachi.</p>
+                  <p className="mt-2 text-sm text-gray-600 dark:text-slate-300">View rent due today.</p>
                 </button>
                 {quickActions.map((action) => (
                   <Link key={action.href} href={action.href} className="rounded-2xl bg-white p-6 text-slate-950 shadow-lg transition hover:-translate-y-1 hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-blue-200 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-blue-800">
