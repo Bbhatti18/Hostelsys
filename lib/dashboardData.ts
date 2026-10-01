@@ -133,7 +133,7 @@ export function buildDashboardSummary(data: DashboardData, now = new Date()) {
       admission, resident, room, bed,
       contract: contractsByAdmission.get(text(admission.id)),
       depositState: getAdmissionDeposit(admission, data.bills, data.payments).state,
-      admissions: data.admissions,
+      admissions: data.admissions, bills: data.bills, payments: data.payments,
     });
   });
   const blockedByContractApproval = pendingAdmissions.filter((admission) => {

@@ -121,7 +121,7 @@ const workflow = load("contractWorkflow");
 const signed = { contract_content: "Agreed", resident_signature_url: "proof", resident_signature_status: "Submitted", signed_by_resident: true, signed_at: "2026-09-01" };
 assert.equal(workflow.isAdmissionReadyForActivation("verified", signed), false);
 assert.equal(workflow.isAdmissionReadyForActivation("pending", { ...signed, resident_signature_status: "Approved" }), false);
-assert.equal(workflow.isAdmissionReadyForActivation("verified", { ...signed, status: "Pending Signature", resident_signature_status: "Approved" }), true);
+assert.equal(workflow.isAdmissionReadyForActivation("verified", { ...signed, status: "Pending Signature", resident_signature_status: "Approved" }, "verified"), true);
 const { isNoticeVisibleToResident, compareNoticeProminence } = load("noticeVisibility");
 const notice = { id: 1, audience: "All Residents", status: "Published", publish_date: "2026-09-01" };
 assert.equal(isNoticeVisibleToResident(notice, "resident", "room", "2026-09-21"), true);
@@ -145,7 +145,7 @@ const payment = (status, amount = 17000) => ({resident_id:'resident',bill_id:'de
 assert.equal(state(zeroAdmission, [], []), 'not_required');
 assert.equal(workflow.depositStateLabel('not_required'), 'No Deposit Required');
 assert.equal(workflow.isDepositVerified('not_required'), false);
-assert.equal(workflow.isAdmissionReadyForActivation('not_required', approvedContract), true);
+assert.equal(workflow.isAdmissionReadyForActivation('not_required', approvedContract, 'verified'), true);
 assert.equal(workflow.isAdmissionReadyForActivation('not_required', {...approvedContract,resident_signature_status:'Submitted'}), false);
 assert.equal(workflow.isAdmissionReadyForActivation('not_required', null), false);
 assert.equal(state(depositAdmission, [], []), 'pending', 'Held alone is not payment evidence');

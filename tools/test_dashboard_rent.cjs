@@ -91,7 +91,7 @@ data.payments=[payment('Verified',10000)];assert.equal(list(data)[0].outstanding
 data.payments=[payment('Verified',15300)];assert.equal(list(data).length,0,'Utility-only remainder is not Rent due');
 assert.equal(buildDashboardSummary(data,now).diagnostics.pendingRentBills,0);
 data=fixture();data.contracts=[{id:'c',admission_id:'a',status:'Pending Signature',resident_signature_url:'local',resident_signature_status:'Approved',signed_by_resident:true,signed_at:'2026-09-01',contract_content:'Terms'}];
-assert.equal(buildDashboardSummary(data,now).diagnostics.readyForActivation,1,'Not-required deposit readiness preserved');
+assert.equal(buildDashboardSummary(data,now).diagnostics.readyForActivation,0,'Zero deposit cannot waive unpaid Rent');
 assert.equal(buildDashboardSummary(data,now).diagnostics.pendingDeposits,0);
 assert.equal(buildDashboardSummary(data,now).rentDueToday.length,1);
 assert.equal(buildDashboardSummary(data,now).diagnostics.pendingRentBills,1);
@@ -101,7 +101,7 @@ assert.ok(buildDashboardSummary(data,now).tasks.some(t=>t.id==='approaching-bill
 const workflow=load('contractWorkflow');
 const approvedContract={...data.contracts[0]};
 function readinessFixture() {
-  const value=fixture(); value.contracts=[{...approvedContract}]; return value;
+  const value=fixture(); value.contracts=[{...approvedContract}]; value.bills[0].billing_month='2026-09'; value.payments=[payment('Verified')]; return value;
 }
 function assertReadiness(value,state,ready) {
   const snapshot=JSON.stringify(value);
@@ -110,13 +110,13 @@ function assertReadiness(value,state,ready) {
   assert.equal(workflow.isDepositVerified(deposit.state),state==='verified');
   assert.equal(workflow.isAdmissionActivationReady({admission:value.admissions[0],resident:value.residents[0],
     room:value.rooms[0],bed:value.beds[0],contract:value.contracts[0],depositState:deposit.state,
-    admissions:value.admissions}),ready);
+    admissions:value.admissions,bills:value.bills,payments:value.payments}),ready);
   assert.equal(buildDashboardSummary(value,now).diagnostics.readyForActivation,Number(ready));
   assert.equal(JSON.stringify(value),snapshot,'Readiness never creates financial or audit records');
 }
 data=readinessFixture();assertReadiness(data,'not_required',true);
 assert.equal(workflow.depositStateLabel('not_required'),'No Deposit Required');
-assert.equal(data.payments.length,0);assert.equal(data.receipts.length,0);
+assert.equal(data.payments.length,1);assert.equal(data.receipts.length,0); // Rent only; no deposit evidence.
 function positiveFixture() {
   const value=readinessFixture();value.admissions[0].security_deposit=10000;
   value.bills.push({id:'deposit',resident_id:'r',admission_id:'a',bill_type:'Security Deposit',bill_status:'Pending',total_amount:10000});
@@ -124,14 +124,14 @@ function positiveFixture() {
 }
 data=positiveFixture();assertReadiness(data,'pending',false);
 for(const status of ['Pending','Rejected','Cancelled','Verified']) {
-  data=positiveFixture();data.payments=[{id:'dp',resident_id:'r',bill_id:'deposit',payment_status:status,amount:10000}];
+  data=positiveFixture();data.payments=[payment('Verified'),{id:'dp',resident_id:'r',bill_id:'deposit',payment_status:status,amount:10000}];
   assertReadiness(data,status==='Verified'?'verified':'pending',status==='Verified');
 }
-data=positiveFixture();data.payments=[{id:'dp',resident_id:'r',payment_status:'Verified',amount:5000,
+data=positiveFixture();data.payments=[payment('Verified'),{id:'dp',resident_id:'r',payment_status:'Verified',amount:5000,
   allocations:[{bill_id:'deposit',amount:5000}]}];assertReadiness(data,'pending',false);
-data.payments[0].amount=10000;data.payments[0].allocations[0].amount=10000;assertReadiness(data,'verified',true);
+data.payments[1].amount=10000;data.payments[1].allocations[0].amount=10000;assertReadiness(data,'verified',true);
 data=positiveFixture();data.bills.push({...data.bills[1],id:'old-deposit',admission_id:'old'});
-data.payments=[{id:'old-payment',resident_id:'r',bill_id:'old-deposit',payment_status:'Verified',amount:10000}];
+data.payments=[payment('Verified'),{id:'old-payment',resident_id:'r',bill_id:'old-deposit',payment_status:'Verified',amount:10000}];
 assertReadiness(data,'pending',false);
 for(const status of ['Cancelled','Terminated','Draft','Active']) {
   data=readinessFixture();data.contracts[0].status=status;assertReadiness(data,'not_required',false);
@@ -154,6 +154,34 @@ for(const change of [
   value=>value.beds[0].status='Available',
   value=>value.admissions.push({...value.admissions[0],id:'conflict',status:'Active'}),
 ]) {data=readinessFixture();change(data);assertReadiness(data,'not_required',false);}
+// Rent is independent of Deposit and only the initial admission month is required.
+for(const status of ['Pending','Rejected','Cancelled','Reversed']) {
+  data=readinessFixture();data.payments=[payment(status)];
+  data.receipts=[{id:'proof',resident_id:'r',bill_id:'rent',status:'Pending Verification'}];
+  assertReadiness(data,'not_required',false);
+}
+data=readinessFixture();data.payments=[];assertReadiness(data,'not_required',false);
+data=readinessFixture();data.payments=[payment('Verified',1000)];assertReadiness(data,'not_required',false);
+data.payments.push(data.payments[0]);assertReadiness(data,'not_required',false);
+data=positiveFixture();data.payments=[{id:'dp',resident_id:'r',bill_id:'deposit',payment_status:'Verified',amount:10000}];assertReadiness(data,'verified',false);
+for(const status of ['Verified','Pending','Rejected','Cancelled','Reversed']) {
+  data=positiveFixture();data.payments=[{id:'combined',resident_id:'r',payment_status:status,amount:27000,
+    payment_allocations:[{bill_id:'rent',amount:17000},{bill_id:'deposit',amount:10000}]}];
+  assertReadiness(data,status==='Verified'?'verified':'pending',status==='Verified');
+}
+data=readinessFixture();data.bills.push({...data.bills[0],id:'old-rent',admission_id:'old'});
+data.payments=[{...payment('Verified'),bill_id:'old-rent'}];assertReadiness(data,'not_required',false);
+data=readinessFixture();data.bills.push({...data.bills[0],id:'future',billing_month:'2026-11'});assertReadiness(data,'not_required',true);
+for(const change of [
+  value=>value.bills=[],
+  value=>value.bills[0].billing_month='2026-11',
+  value=>value.bills[0].bill_status='Cancelled',
+  value=>value.bills[0].bill_status='Pending Approval',
+  value=>value.bills.push({...value.bills[0],id:'ambiguous'}),
+  value=>value.payments[0].resident_id='different',
+  value=>value.admissions.push({...value.admissions[0],id:'newer',admission_date:'2026-10-01',bed_id:'other',status:'Completed'}),
+]) {data=readinessFixture();change(data);assertReadiness(data,'not_required',false);}
+data=readinessFixture();data.payments=[];data.bills[0].bill_status='Paid';data.bills[0].balance_amount=0;assertReadiness(data,'not_required',false);
 console.log('PASS activation readiness: zero/positive deposits, canonical allocations, old admissions, invalid contracts, occupancy guards, Dashboard/Admissions parity and no mutations.');
 
 (async()=>{

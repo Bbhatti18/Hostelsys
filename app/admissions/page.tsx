@@ -19,8 +19,10 @@ import {
   isAdmissionActivationReady,
   isContractSignedAndAccepted,
   getAdmissionDeposit,
+  getAdmissionRent,
   depositStateLabel,
 } from "@/lib/contractWorkflow";
+import { readDashboardRows } from "@/lib/dashboardRead";
 import { supabase } from "@/lib/supabase";
 import { getSupabaseErrorMessage } from "@/lib/supabaseErrors";
 import {
@@ -206,8 +208,8 @@ export default function AdmissionsPage() {
           "id, admission_id, status, resident_signature_url, resident_signature_status, signed_by_resident, signed_at, contract_content",
         )
         .order("created_at", { ascending: false }),
-      supabase.from("bills").select("id, resident_id, admission_id, bill_type, bill_status, total_amount").eq("bill_type", "Security Deposit"),
-      supabase.from("payments").select("id, resident_id, bill_id, amount, payment_status, payment_allocations(bill_id, amount)"),
+      readDashboardRows(supabase.from("bills").select("*").in("bill_type", ["Rent", "Security Deposit"]).order("id")),
+      readDashboardRows(supabase.from("payments").select("id, resident_id, bill_id, amount, payment_status, payment_allocations(bill_id, amount)").order("id")),
     ]);
 
     const firstError =
@@ -755,179 +757,16 @@ export default function AdmissionsPage() {
     setError("");
 
     try {
-      await requireContractStaff();
-      const context = await loadLifecycleContext(admissionId);
-      if (context.admission.status !== "Pending") {
-        throw new Error("Only a Pending admission can be activated.");
-      }
-      if (context.resident.status === "Archived") {
-        throw new Error("An Archived resident cannot be activated.");
-      }
-      if (!isAdmissionRoomStatus(context.room.status)) {
-        throw new Error("The assigned room is no longer operational.");
-      }
-      const [billsResult, paymentsResult] = await Promise.all([
-        supabase.from("bills").select("id, resident_id, admission_id, bill_type, bill_status, total_amount").eq("admission_id", context.admission.id).eq("bill_type", "Security Deposit"),
-        supabase.from("payments").select("id, resident_id, bill_id, amount, payment_status, payment_allocations(bill_id, amount)").eq("resident_id", context.admission.resident_id),
-      ]);
-      if (billsResult.error || paymentsResult.error) throw new Error("Unable to verify the admission deposit evidence.");
-      const deposit = getAdmissionDeposit(context.admission, billsResult.data ?? [], paymentsResult.data ?? []);
-      if (deposit.state === "pending") {
-        throw new Error("The required deposit must be fully verified before activation.");
-      }
-      if (!context.contract) {
-        throw new Error("A contract linked to this admission is required before activation.");
-      }
-      if (context.contract.status !== "Pending Signature" || !isContractSignedAndAccepted(context.contract)) {
-        throw new Error(
-          "The resident signature must be submitted and approved before activation.",
-        );
-      }
-      if (context.bed.status !== BED_STATUS.OCCUPIED) {
-        throw new Error("The assigned bed must still be Occupied before activation.");
-      }
-
-      const { data: conflictingAdmission, error: conflictError } =
-        await supabase
-          .from("admissions")
-          .select("id")
-          .eq("bed_id", context.admission.bed_id)
-          .in("status", ["Active", "Pending"])
-          .neq("id", admissionId)
-          .limit(1)
-          .maybeSingle();
-
-      if (conflictError) {
-        throw new Error(
-          getSupabaseErrorMessage(
-            conflictError,
-            "Unable to verify the assigned bed.",
-          ),
-        );
-      }
-      if (conflictingAdmission) {
-        throw new Error("The assigned bed belongs to another current admission.");
-      }
-
-      // The live conflict query above succeeded and found no other current occupant.
-      if (!isAdmissionActivationReady({ ...context, depositState: deposit.state, admissions: [] })) {
-        throw new Error("This admission no longer meets the activation prerequisites. Please refresh.");
-      }
-      const previousContractStatus = context.contract.status;
-      let contractActivation = supabase
-        .from("contracts")
-        .update({
-          status: "Active",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", context.contract.id)
-        .eq("admission_id", admissionId)
-        .eq("resident_signature_url", context.contract.resident_signature_url)
-        .eq("signed_at", context.contract.signed_at)
-        .eq("signed_by_resident", true)
-        .eq("contract_content", context.contract.contract_content)
-        .eq("resident_signature_status", "Approved");
-
-      contractActivation = previousContractStatus
-        ? contractActivation.eq("status", previousContractStatus)
-        : contractActivation.is("status", null);
-
-      const { data: activatedContract, error: contractActivateError } =
-        await contractActivation
-        .select("id")
-        .maybeSingle();
-
-      if (contractActivateError || !activatedContract) {
-        throw new Error(
-          contractActivateError
-            ? getSupabaseErrorMessage(
-                contractActivateError,
-                "Unable to activate the signed contract. The admission remains Pending.",
-              )
-            : "The signed contract could not be activated. The admission remains Pending.",
-        );
-      }
-
-      const { data: activated, error: activateError } = await supabase
-        .from("admissions")
-        .update({ status: "Active", updated_at: new Date().toISOString() })
-        .eq("id", admissionId)
-        .eq("resident_id", context.admission.resident_id)
-        .eq("room_id", context.admission.room_id)
-        .eq("bed_id", context.admission.bed_id)
-        .eq("deposit_status", deposit.state === "verified" ? "Held" : context.admission.deposit_status)
-        .eq("security_deposit", context.admission.security_deposit)
-        .eq("status", "Pending")
-        .select("id")
-        .maybeSingle();
-
-      if (activateError || !activated) {
-        const { data: rolledBackContract, error: rollbackError } = await supabase
-          .from("contracts")
-          .update({
-            status: previousContractStatus,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", context.contract.id)
-          .eq("status", "Active")
-          .select("id")
-          .maybeSingle();
-
-        throw new Error(
-          rollbackError || !rolledBackContract
-            ? "Admission activation failed and the contract could not be returned to its previous status. The resident signature and terms were preserved; contact an administrator."
-            : activateError
-            ? getSupabaseErrorMessage(
-                activateError,
-                "Unable to activate this admission. The contract was returned to its previous status.",
-              )
-            : "This admission is no longer Pending. The contract was returned to its previous status.",
-        );
-      }
-
-      let residentActivation = supabase
-        .from("residents")
-        .update({
-          status: RESIDENT_STATUS.ACTIVE,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", context.admission.resident_id);
-      residentActivation = context.resident.status
-        ? residentActivation.eq("status", context.resident.status)
-        : residentActivation.is("status", null);
-      const { data: activatedResident, error: residentActivateError } =
-        await residentActivation.select("id").maybeSingle();
-      if (residentActivateError || !activatedResident) {
-        const [{ data: rolledBackAdmission }, { data: rolledBackContract }] =
-          await Promise.all([
-            supabase
-              .from("admissions")
-              .update({ status: "Pending", updated_at: new Date().toISOString() })
-              .eq("id", admissionId)
-              .eq("status", "Active")
-              .select("id")
-              .maybeSingle(),
-            supabase
-              .from("contracts")
-              .update({
-                status: previousContractStatus,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", context.contract.id)
-              .eq("status", "Active")
-              .select("id")
-              .maybeSingle(),
-          ]);
-        throw new Error(
-          rolledBackAdmission && rolledBackContract
-            ? "The resident operational status could not be activated, so the admission and contract were returned to Pending."
-            : "The resident operational status could not be activated and the lifecycle rollback was incomplete. Please contact an administrator.",
-        );
-      }
-
-      setMessage(deposit.state === "not_required"
-        ? "Contract verified; no deposit required. Admission activated successfully."
-        : "Contract and deposit verified. Admission activated successfully.");
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !data.session) throw new Error("Your staff session could not be verified.");
+      const response = await fetch("/api/admissions/activate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + data.session.access_token },
+        body: JSON.stringify({ admissionId }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Unable to activate this admission.");
+      setMessage(result.message);
       await refresh();
       setAdmissionDataVersion((current) => current + 1);
     } catch (activationError) {
@@ -1031,11 +870,7 @@ export default function AdmissionsPage() {
         "contract_approved",
         currentContract.id,
       );
-      setMessage(
-        getAdmissionDeposit(admissions.find(item => item.id === admission.id), depositBills, depositPayments).state !== "pending"
-          ? `Resident signature approved. Admission is ready when its allocation is valid; use Activate Admission as a separate admin action.${notificationWarning(notificationResult)}`
-          : `Resident signature approved. Admission remains Pending until the security deposit receipt is verified, then requires separate admin activation.${notificationWarning(notificationResult)}`,
-      );
+      setMessage(`Resident signature approved. Activation still requires fully verified initial Rent, a satisfied deposit prerequisite, and a valid allocation; use Activate Admission as a separate staff action.${notificationWarning(notificationResult)}`);
       await refresh();
       setAdmissionDataVersion((current) => current + 1);
     } catch (approvalError) {
@@ -1638,9 +1473,10 @@ const contractSignatureLabel = contractSigned
         : "No";
 
 const deposit = getAdmissionDeposit(admission, depositBills, depositPayments);
+const rent = getAdmissionRent(admission, depositBills, depositPayments);
                     const readyForActivation = isAdmissionActivationReady({
                       admission, resident, room, bed, contract,
-                      depositState: deposit.state, admissions,
+                      depositState: deposit.state, admissions, bills: depositBills, payments: depositPayments,
                     });
 
                     return (
@@ -1672,6 +1508,7 @@ const deposit = getAdmissionDeposit(admission, depositBills, depositPayments);
 
 <td className="px-5 py-4 text-sm text-slate-700">
   <p>Rent: {money(admission.monthly_rent)}</p>
+  <p className="mt-1 text-xs font-semibold">Rent: {rent.state === "verified" ? "Verified" : "Pending"}</p>
 
   <p className="mt-1 text-xs text-slate-500">
     Deposit: {money(deposit.required)}
