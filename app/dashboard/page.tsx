@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ProfileDropdown from "@/components/layout/ProfileDropdown";
 import Sidebar from "@/components/layout/Sidebar";
 import DashboardCharts from "@/components/dashboard/DashboardCharts";
@@ -10,6 +10,8 @@ import { buildDashboardSummary, type DashboardData, type DashboardTask } from "@
 import { supabase } from "@/lib/supabase";
 import { getSupabaseErrorMessage } from "@/lib/supabaseErrors";
 import { usePermissions } from "@/lib/usePermissions";
+import { readDashboardRows } from "@/lib/dashboardRead";
+import { normalizeBedLabel } from "@/lib/bedLabels";
 
 const emptyData: DashboardData = {
   residents: [], admissions: [], contracts: [], bills: [], payments: [],
@@ -50,50 +52,68 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showAllActivity, setShowAllActivity] = useState(false);
+  const [showRentDueToday, setShowRentDueToday] = useState(false);
+  const [snapshotTime, setSnapshotTime] = useState(() => new Date());
+  const requestInFlight = useRef(false);
 
   const canAccessDashboard = permsLoading || isSuperAdmin || hasPermission("dashboard");
 
   const loadDashboardData = useCallback(async () => {
+    if (requestInFlight.current) return;
+    requestInFlight.current = true;
     setLoading(true);
     setError("");
+    try {
+      const results = await Promise.all([
+        supabase.from("residents").select("id,full_name,resident_code,status,created_at,updated_at").order("created_at", { ascending: false }),
+        supabase.from("admissions").select("id,admission_number,resident_id,room_id,bed_id,admission_date,monthly_rent,security_deposit,status,deposit_status,expected_leaving_date,created_at,updated_at").order("created_at", { ascending: false }),
+        supabase.from("contracts").select("id,contract_number,resident_id,admission_id,status,resident_signature_url,resident_signature_status,signed_by_resident,signed_at,contract_content,created_at,updated_at").order("created_at", { ascending: false }),
+        supabase.from("bills").select("id,bill_number,resident_id,admission_id,billing_month,bill_type,rent_amount,electricity_amount,ac_amount,other_amount,discount_amount,total_amount,due_date,bill_status,created_at,updated_at").order("created_at", { ascending: false }),
+        supabase.from("payments").select("id,payment_number,bill_id,resident_id,amount,payment_status,verified_at,created_at,updated_at,payment_allocations(payment_id,bill_id,amount)").order("created_at", { ascending: false }),
+        supabase.from("payment_receipts").select("id,resident_id,bill_id,payment_id,status,verified_at,created_at,updated_at").order("created_at", { ascending: false }),
+        supabase.from("maintenance_requests").select("id,request_number,resident_id,title,priority,status,completed_at,created_at,updated_at").order("created_at", { ascending: false }),
+        supabase.from("room_inspections").select("id,inspection_number,resident_id,inspection_type,status,inspection_date,created_at,updated_at").order("created_at", { ascending: false }),
+        supabase.from("notices").select("id::text,notice_number,title,status,publish_date,expiry_date,created_at,updated_at").order("created_at", { ascending: false }),
+        supabase.from("rooms").select("id,room_number,status"),
+        supabase.from("beds").select("id,room_id,bed_number,status"),
+      ].map(query => readDashboardRows<Record<string, unknown>>(query.order("id"))));
 
-    const results = await Promise.all([
-      supabase.from("residents").select("id,full_name,resident_code,status,created_at,updated_at").order("created_at", { ascending: false }),
-      supabase.from("admissions").select("id,admission_number,resident_id,room_id,bed_id,monthly_rent,security_deposit,status,deposit_status,expected_leaving_date,created_at,updated_at").order("created_at", { ascending: false }),
-      supabase.from("contracts").select("id,contract_number,resident_id,admission_id,status,resident_signature_url,resident_signature_status,signed_by_resident,signed_at,contract_content,created_at,updated_at").order("created_at", { ascending: false }),
-      supabase.from("bills").select("id,bill_number,resident_id,admission_id,billing_month,bill_type,rent_amount,electricity_amount,ac_amount,other_amount,discount_amount,total_amount,due_date,bill_status,created_at,updated_at").order("created_at", { ascending: false }),
-      supabase.from("payments").select("id,payment_number,bill_id,resident_id,amount,payment_status,verified_at,created_at,updated_at,payment_allocations(payment_id,bill_id,amount)").order("created_at", { ascending: false }),
-      supabase.from("payment_receipts").select("id,resident_id,bill_id,status,verified_at,created_at,updated_at").order("created_at", { ascending: false }),
-      supabase.from("maintenance_requests").select("id,request_number,resident_id,title,priority,status,completed_at,created_at,updated_at").order("created_at", { ascending: false }),
-      supabase.from("room_inspections").select("id,inspection_number,resident_id,inspection_type,status,inspection_date,created_at,updated_at").order("created_at", { ascending: false }),
-      supabase.from("notices").select("id::text,notice_number,title,status,publish_date,expiry_date,created_at,updated_at").order("created_at", { ascending: false }),
-      supabase.from("rooms").select("id,status"),
-      supabase.from("beds").select("id,room_id,status"),
-    ]);
-
-    const failed = results.find((result) => result.error)?.error;
-    if (failed) {
-      setError(getSupabaseErrorMessage(failed, "Dashboard data could not be loaded. Please refresh and try again."));
-    } else {
-      setData({
-        residents: results[0].data ?? [], admissions: results[1].data ?? [],
-        contracts: results[2].data ?? [], bills: results[3].data ?? [],
-        payments: results[4].data ?? [], receipts: results[5].data ?? [],
-        maintenance: results[6].data ?? [], inspections: results[7].data ?? [],
-        notices: results[8].data ?? [], rooms: results[9].data ?? [],
-        beds: results[10].data ?? [],
-      });
+      const failed = results.find((result) => result.error)?.error;
+      if (failed) {
+        setError(getSupabaseErrorMessage(failed, "Dashboard data could not be loaded. Please refresh and try again."));
+      } else {
+        setData({
+          residents: results[0].data ?? [], admissions: results[1].data ?? [],
+          contracts: results[2].data ?? [], bills: results[3].data ?? [],
+          payments: results[4].data ?? [], receipts: results[5].data ?? [],
+          maintenance: results[6].data ?? [], inspections: results[7].data ?? [],
+          notices: results[8].data ?? [], rooms: results[9].data ?? [],
+          beds: results[10].data ?? [],
+        });
+      }
+      setSnapshotTime(new Date());
+    } catch {
+      setError("Dashboard data could not be loaded. Please refresh and try again.");
+    } finally {
+      requestInFlight.current = false;
+      setLoading(false);
     }
-
-    setLoading(false);
   }, []);
 
   useEffect(() => {
+    if (permsLoading || !canAccessDashboard) return;
     const timeout = window.setTimeout(() => void loadDashboardData(), 0);
-    return () => window.clearTimeout(timeout);
-  }, [loadDashboardData]);
+    const refreshVisible = () => { if (document.visibilityState === "visible") void loadDashboardData(); };
+    const interval = window.setInterval(refreshVisible, 60_000);
+    window.addEventListener("focus", refreshVisible);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshVisible);
+    };
+  }, [loadDashboardData, canAccessDashboard, permsLoading]);
 
-  const summary = useMemo(() => buildDashboardSummary(data), [data]);
+  const summary = useMemo(() => buildDashboardSummary(data, snapshotTime), [data, snapshotTime]);
   const visibleActivities = showAllActivity
     ? summary.activities
     : summary.activities.slice(0, 3);
@@ -134,6 +154,13 @@ export default function DashboardPage() {
 
               <h3 className="mb-4 text-xl font-semibold text-gray-800 sm:mb-6 sm:text-2xl dark:text-slate-100">Quick Actions</h3>
               <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+                <button type="button" aria-expanded={showRentDueToday} aria-controls="rent-due-today-panel"
+                  onClick={() => { setShowRentDueToday(value => !value); if (!showRentDueToday) void loadDashboardData(); }}
+                  className="rounded-2xl bg-white p-6 text-left text-slate-950 shadow-lg transition hover:-translate-y-1 hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-blue-200 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-blue-800">
+                  <div className="text-4xl" aria-hidden="true">📅</div>
+                  <h4 className="mt-4 text-xl font-bold">Rent Due Today ({loading ? "…" : error ? "Unavailable" : summary.rentDueToday.length})</h4>
+                  <p className="mt-2 text-sm text-gray-600 dark:text-slate-300">View outstanding rent due today in Asia/Karachi.</p>
+                </button>
                 {quickActions.map((action) => (
                   <Link key={action.href} href={action.href} className="rounded-2xl bg-white p-6 text-slate-950 shadow-lg transition hover:-translate-y-1 hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-blue-200 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-blue-800">
                     <div className="text-4xl" aria-hidden="true">{action.icon}</div>
@@ -142,6 +169,41 @@ export default function DashboardPage() {
                   </Link>
                 ))}
               </div>
+
+              {showRentDueToday && (
+                <section id="rent-due-today-panel" aria-labelledby="rent-due-today-heading" aria-busy={loading}
+                  className="mt-6 rounded-2xl bg-white p-4 shadow-lg sm:p-6 dark:bg-slate-800">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div><h3 id="rent-due-today-heading" className="text-xl font-bold">Rent Due Today</h3>
+                      <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{summary.today} · Asia/Karachi · Refreshes every minute</p></div>
+                    <div className="flex gap-3">
+                      <button type="button" disabled={loading} onClick={() => void loadDashboardData()} className="rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-50">Refresh</button>
+                      <button type="button" onClick={() => setShowRentDueToday(false)} className="rounded-lg border px-3 py-2 text-sm font-semibold">Close</button>
+                    </div>
+                  </div>
+                  {loading ? <p role="status" className="mt-5">Loading rent due today...</p> : error ?
+                    <p role="status" className="mt-5 text-red-700 dark:text-red-300">Rent due today is unavailable. Please refresh.</p> :
+                    summary.rentDueToday.length === 0 ? <p role="status" className="mt-5 text-slate-600 dark:text-slate-300">No outstanding Rent is due today.</p> :
+                    <ul className="mt-5 space-y-4">
+                      {summary.rentDueToday.map(item => (
+                        <li key={item.billId} className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div><p className="font-bold">{item.residentName}</p><p className="text-sm text-slate-600 dark:text-slate-300">Room {item.room} / {item.bed ? normalizeBedLabel(item.bed) : "Bed not allocated"}</p></div>
+                            <span className="rounded-full bg-amber-50 px-3 py-1 text-sm font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-200">{item.paymentState}</span>
+                          </div>
+                          <dl className="my-4 grid gap-3 text-sm sm:grid-cols-3">
+                            <div><dt>Rent amount</dt><dd className="font-semibold">Rs {item.rentAmount.toLocaleString("en-PK")}</dd></div>
+                            <div><dt>Outstanding Rent</dt><dd className="font-semibold">Rs {item.outstandingAmount.toLocaleString("en-PK")}</dd></div>
+                            <div><dt>Due date</dt><dd className="font-semibold">{item.dueDate}</dd></div>
+                          </dl>
+                          <Link href={item.href} className="inline-flex rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800">
+                            {item.paymentState === "Payment Pending Verification" ? "Review payment" : "Open Rent Billing"}
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>}
+                </section>
+              )}
 
               <div className="mt-10 grid gap-6 lg:grid-cols-2">
                 <section className="rounded-2xl bg-white p-6 text-slate-950 shadow-lg dark:bg-slate-800 dark:text-slate-100">
@@ -176,11 +238,11 @@ export default function DashboardPage() {
                   )}
                 </section>
               </div>
-              
+
               <DashboardCharts data={data} />
             </>
           )}
-          
+
         </section>
       </div>
     </main>

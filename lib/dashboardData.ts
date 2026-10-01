@@ -1,7 +1,8 @@
 import { validDate } from "@/lib/canonical";
 import { getAdmissionDeposit, isAdmissionReadyForActivation, isContractSignedAndAccepted } from "@/lib/contractWorkflow";
-import { deriveBillStatus, roundMoney } from "@/lib/financials";
+import { deriveBillStatus, roundMoney } from "@/lib/financialMath";
 import { paymentBillAmounts } from "@/lib/paymentAllocations";
+import { buildDashboardRent, currentPayableDashboardBills, dashboardPayments, karachiCalendarDate } from "./dashboardRent";
 
 export type DashboardRow = Record<string, unknown>;
 
@@ -41,15 +42,12 @@ const normalized = (value: unknown) => text(value).toLowerCase();
 const number = (value: unknown) => Number(value ?? 0);
 
 function localDay(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return karachiCalendarDate(date);
 }
 
 function addDays(date: Date, days: number) {
   const result = new Date(date);
-  result.setDate(result.getDate() + days);
+  result.setUTCDate(result.getUTCDate() + days);
   return localDay(result);
 }
 
@@ -171,19 +169,18 @@ export function buildDashboardSummary(data: DashboardData, now = new Date()) {
   });
 
   const verifiedByBill = new Map<string, number>();
-  data.payments.forEach((payment) => {
+  dashboardPayments(data.payments).forEach((payment) => {
     if (normalized(payment.payment_status) !== "verified") return;
-    for (const allocation of paymentBillAmounts(payment, Array.isArray(payment.allocations) ? payment.allocations as Array<{ bill_id: string; amount: number }> : [])) {
+    for (const allocation of paymentBillAmounts({
+      bill_id: text(payment.bill_id), amount: number(payment.amount), payment_status: text(payment.payment_status),
+    }, payment.allocations as Array<{ bill_id: string; amount: number }>)) {
       const billId = text(allocation.bill_id);
       if (!billId) continue;
       verifiedByBill.set(billId, roundMoney((verifiedByBill.get(billId) ?? 0) + number(allocation.amount)));
     }
   });
 
-  const outstandingBills = data.bills
-    .filter(
-      (bill) => !["cancelled", "archived", "draft", "pending approval"].includes(normalized(bill.bill_status)),
-    )
+  const outstandingBills = currentPayableDashboardBills(data, today)
     .map((bill) => {
       const total = roundMoney(number(bill.total_amount));
       const paid = verifiedByBill.get(text(bill.id)) ?? 0;
@@ -199,12 +196,8 @@ export function buildDashboardSummary(data: DashboardData, now = new Date()) {
   const overdueBills = outstandingBills.filter(
     ({ dueDate }) => Boolean(dueDate) && dueDate < today,
   );
-  const pendingRentBills = outstandingBills.filter(
-    ({ bill, dueDate, status }) =>
-      number(bill.rent_amount) > 0 &&
-      dueDate >= today &&
-      ["Pending", "Partially Paid"].includes(status),
-  );
+  const rent = buildDashboardRent(data, now);
+  const pendingRentBills = rent.outstanding.filter(({ dueDate }) => dueDate >= today);
   const approachingBills = outstandingBills.filter(
     ({ dueDate }) => Boolean(dueDate) && dueDate >= today && dueDate <= nextSevenDays,
   );
@@ -328,6 +321,8 @@ export function buildDashboardSummary(data: DashboardData, now = new Date()) {
   activities.sort((left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt));
 
   return {
+    rentDueToday: rent.dueToday,
+    today,
     tasks,
     activities: activities.slice(0, 12),
     diagnostics: {
