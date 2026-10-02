@@ -15,6 +15,8 @@ type Resident = {
   email?: string | null;
   cnic?: string | null;
   emergency_contact?: string | null;
+  emergency_contact_name?: string | null;
+  emergency_contact_relationship?: string | null;
   permanent_address?: string | null;
   status?: string | null;
   photo_url?: string | null;
@@ -169,7 +171,17 @@ export default function ResidentProfilePage() {
                   />
 
                   <InfoCard
-                    label="Emergency Contact"
+                    label="Emergency Contact Name"
+                    value={resident.emergency_contact_name || "Not recorded"}
+                  />
+
+                  <InfoCard
+                    label="Relationship"
+                    value={resident.emergency_contact_relationship || "Not recorded"}
+                  />
+
+                  <InfoCard
+                    label="Emergency Contact / Phone"
                     value={
                       resident.emergency_contact ||
 

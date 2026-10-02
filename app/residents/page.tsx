@@ -32,6 +32,8 @@ type Resident = {
   cnic?: string | null;
   dob?: string | null;
   gender?: string | null;
+  emergency_contact_name?: string | null;
+  emergency_contact_relationship?: string | null;
   emergency_contact?: string | null;
   permanent_address?: string | null;
   city?: string | null;
@@ -54,6 +56,8 @@ type ResidentForm = {
   gender: string;
   phone: string;
   email: string;
+  emergency_contact_name: string;
+  emergency_contact_relationship: string;
   emergency_contact: string;
   permanent_address: string;
   city: string;
@@ -102,6 +106,8 @@ const emptyForm: ResidentForm = {
   gender: "",
   phone: "",
   email: "",
+  emergency_contact_name: "",
+  emergency_contact_relationship: "",
   emergency_contact: "",
   permanent_address: "",
   city: "",
@@ -112,6 +118,8 @@ const emptyForm: ResidentForm = {
   id_card_url: "",
   status: RESIDENT_STATUS.INACTIVE,
 };
+
+const emergencyRelationships = ["Father", "Mother", "Brother", "Sister", "Guardian", "Spouse", "Other"];
 
 const inputClass =
   "w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-100";
@@ -483,6 +491,8 @@ export default function ResidentsPage() {
       gender: resident.gender ?? "",
       phone: resident.phone ?? "",
       email: resident.email ?? "",
+      emergency_contact_name: resident.emergency_contact_name ?? "",
+      emergency_contact_relationship: resident.emergency_contact_relationship ?? "",
       emergency_contact: resident.emergency_contact ?? "",
       permanent_address: resident.permanent_address ?? "",
       city: resident.city ?? "",
@@ -581,6 +591,8 @@ export default function ResidentsPage() {
       cnic: form.cnic.trim() || null,
       dob: form.dob || null,
       gender: form.gender || null,
+      emergency_contact_name: form.emergency_contact_name.trim() || null,
+      emergency_contact_relationship: form.emergency_contact_relationship || null,
       emergency_contact: form.emergency_contact.trim() || null,
       permanent_address: form.permanent_address.trim() || null,
       city: form.city.trim() || null,
@@ -827,7 +839,19 @@ export default function ResidentsPage() {
                 <Field label="Email *">
                   <input required type="email" value={form.email} onChange={(event) => updateField("email", event.target.value)} className={inputClass} placeholder="resident@example.com" />
                 </Field>
-                <Field label="Emergency Contact">
+                <Field label="Emergency Contact Name">
+                  <input value={form.emergency_contact_name} onChange={(event) => updateField("emergency_contact_name", event.target.value)} className={inputClass} placeholder="Emergency contact name" />
+                </Field>
+                <Field label="Relationship">
+                  <select value={form.emergency_contact_relationship} onChange={(event) => updateField("emergency_contact_relationship", event.target.value)} className={inputClass}>
+                    <option value="">Select relationship</option>
+                    {form.emergency_contact_relationship && !emergencyRelationships.includes(form.emergency_contact_relationship) && (
+                      <option value={form.emergency_contact_relationship}>{form.emergency_contact_relationship}</option>
+                    )}
+                    {emergencyRelationships.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}
+                  </select>
+                </Field>
+                <Field label="Emergency Contact / Phone">
                   <input value={form.emergency_contact} onChange={(event) => updateField("emergency_contact", event.target.value)} className={inputClass} placeholder="Emergency phone" />
                 </Field>
                 <Field label="Permanent Address" wide>
@@ -1012,6 +1036,9 @@ export default function ResidentsPage() {
                     <InfoCard label="Father / Guardian" value={text(profile.resident.father_name || "—")} />
                     <InfoCard label="Phone" value={text(profile.resident.phone || "—")} />
                     <InfoCard label="Email" value={text(profile.resident.email || "—")} />
+                    <InfoCard label="Emergency Contact Name" value={text(profile.resident.emergency_contact_name || "Not recorded")} />
+                    <InfoCard label="Relationship" value={text(profile.resident.emergency_contact_relationship || "Not recorded")} />
+                    <InfoCard label="Emergency Contact / Phone" value={text(profile.resident.emergency_contact || "Not recorded")} />
                     <InfoCard label="Portal Access" value={profile.resident.email ? "Configured (Supabase Auth)" : "No email"} />
                     <InfoCard label="CNIC / Passport" value={text(profile.resident.cnic || "—")} />
                     <InfoCard label="Date of Birth" value={text(profile.resident.dob || "—")} />
