@@ -7,6 +7,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { supabase } from "@/lib/supabase";
@@ -20,12 +21,18 @@ import {
   type ResidentStatus,
 } from "@/lib/statuses";
 
+import EmergencyContacts from "@/components/residents/EmergencyContacts";
+import StaffProfileContacts from "@/components/residents/StaffProfileContacts";
+import { contactRelationships, type EmergencyContact } from "@/lib/residentProfile";
+
 type GenericRow = Record<string, unknown>;
 
 type Resident = {
   id: string;
   resident_code?: string | null;
   full_name: string;
+  guardian_cnic?: string | null;
+  guardian_phone?: string | null;
   father_name?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -50,6 +57,8 @@ type Resident = {
 type ResidentForm = {
   resident_code: string;
   full_name: string;
+  guardian_cnic: string;
+  guardian_phone: string;
   father_name: string;
   cnic: string;
   dob: string;
@@ -100,6 +109,8 @@ type ProfileState = {
 const emptyForm: ResidentForm = {
   resident_code: "",
   full_name: "",
+  guardian_cnic: "",
+  guardian_phone: "",
   father_name: "",
   cnic: "",
   dob: "",
@@ -119,7 +130,7 @@ const emptyForm: ResidentForm = {
   status: RESIDENT_STATUS.INACTIVE,
 };
 
-const emergencyRelationships = ["Father", "Mother", "Brother", "Sister", "Guardian", "Spouse", "Other"];
+const emergencyRelationships = contactRelationships;
 
 const inputClass =
   "w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-100";
@@ -186,6 +197,10 @@ async function readFileAsDataUrl(file: File) {
 }
 
 export default function ResidentsPage() {
+  const [extraContacts, setExtraContacts] = useState<EmergencyContact[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactsVersion, setContactsVersion] = useState(0);
+  const retryContactsFor = useRef<string | null>(null);
   const [residents, setResidents] = useState<Resident[]>([]);
   const [form, setForm] = useState<ResidentForm>(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -458,11 +473,31 @@ export default function ResidentsPage() {
     [residents]
   );
 
+  useEffect(() => {
+    if (!editingId) return;
+    if (retryContactsFor.current === editingId) {
+      retryContactsFor.current = null;
+      setContactsLoading(false);
+      return;
+    }
+    let active = true;
+    setContactsLoading(true);
+    void supabase.from("resident_emergency_contacts").select("id,contact_name,relationship,phone").eq("resident_id", editingId).order("created_at").then(({ data, error }) => {
+      if (!active) return;
+      if (error) { setError("Unable to load emergency contacts. Reopen Edit to retry."); return; }
+      setExtraContacts(data || []);
+      setContactsLoading(false);
+    });
+    return () => { active = false; };
+  }, [editingId, contactsVersion]);
+
   function updateField<K extends keyof ResidentForm>(key: K, value: ResidentForm[K]) {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
   function openAddForm() {
+    setExtraContacts([]);
+    setContactsLoading(false);
     setEditingId(null);
     setForm({
       ...emptyForm,
@@ -481,10 +516,15 @@ export default function ResidentsPage() {
       return;
     }
 
+    setContactsLoading(true);
+    setExtraContacts([]);
+    setContactsVersion(value => value + 1);
     setEditingId(resident.id);
     setForm({
       resident_code: resident.resident_code ?? "",
       full_name: resident.full_name,
+      guardian_cnic: resident.guardian_cnic ?? "",
+      guardian_phone: resident.guardian_phone ?? "",
       father_name: resident.father_name ?? "",
       cnic: resident.cnic ?? "",
       dob: resident.dob ?? "",
@@ -519,6 +559,14 @@ export default function ResidentsPage() {
 
   async function saveResident(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (contactsLoading) {
+      setError("Emergency contacts are still loading. Reopen Edit if loading failed.");
+      return;
+    }
+    if (extraContacts.some(contact => !contact.contact_name.trim() || !contact.relationship.trim() || !contact.phone.trim())) {
+      setError("Complete each emergency contact name, relationship and phone.");
+      return;
+    }
     setSaving(true);
     setMessage("");
     setError("");
@@ -585,6 +633,8 @@ export default function ResidentsPage() {
     const payload = {
       resident_code: form.resident_code.trim() || generateResidentCode(residents),
       full_name: form.full_name.trim(),
+      guardian_cnic: form.guardian_cnic.trim() || null,
+      guardian_phone: form.guardian_phone.trim() || null,
       father_name: form.father_name.trim() || null,
       phone: form.phone.trim() || null,
       email: normalizedEmail || null,
@@ -652,6 +702,19 @@ export default function ResidentsPage() {
       }
     }
 
+    const savedResidentId = editingId || result.data?.id;
+    if (savedResidentId && extraContacts.length) {
+      const contactResult = await supabase.rpc("save_resident_emergency_contacts", { p_resident_id: savedResidentId, p_contacts: extraContacts });
+      if (contactResult.error) {
+        if (!editingId) retryContactsFor.current = String(savedResidentId);
+        setEditingId(String(savedResidentId));
+        setMessage(successMessage);
+        await refresh();
+        setError("Resident saved, but additional contacts were not saved. Retry Save Resident; do not create another resident. " + contactResult.error.message);
+        setSaving(false);
+        return;
+      }
+    }
     setMessage(successMessage);
     closeForm();
     await refresh();
@@ -809,6 +872,11 @@ export default function ResidentsPage() {
             </div>
 
             <form onSubmit={saveResident} className="space-y-6">
+              {editingId && <StaffProfileContacts key={editingId} residentId={editingId} statusOnly />}
+              <fieldset disabled={saving || contactsLoading} className="space-y-3">
+                <h3 className="font-semibold">Additional Emergency Contacts</h3>
+                <EmergencyContacts contacts={extraContacts} onChange={setExtraContacts} />
+              </fieldset>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <Field label="Resident Code">
                   <input value={form.resident_code} onChange={(event) => updateField("resident_code", event.target.value)} className={inputClass} placeholder="Auto-generated code" />
@@ -816,9 +884,11 @@ export default function ResidentsPage() {
                 <Field label="Full Name *">
                   <input required value={form.full_name} onChange={(event) => updateField("full_name", event.target.value)} className={inputClass} placeholder="Resident full name" />
                 </Field>
-                <Field label="Father / Guardian Name">
+                <Field label="Guardian Name">
                   <input value={form.father_name} onChange={(event) => updateField("father_name", event.target.value)} className={inputClass} placeholder="Guardian name" />
                 </Field>
+                <Field label="Guardian CNIC / Passport"><input value={form.guardian_cnic} onChange={event => updateField("guardian_cnic", event.target.value)} className={inputClass} /></Field>
+                <Field label="Guardian Phone"><input value={form.guardian_phone} onChange={event => updateField("guardian_phone", event.target.value)} className={inputClass} /></Field>
                 <Field label="CNIC / Passport *">
                   <input required value={form.cnic} onChange={(event) => updateField("cnic", event.target.value)} className={inputClass} placeholder="Identification number" />
                 </Field>
@@ -1034,6 +1104,9 @@ export default function ResidentsPage() {
                     <InfoCard label="Resident Code" value={text(profile.resident.resident_code || "—")} />
                     <InfoCard label="Full Name" value={text(profile.resident.full_name)} />
                     <InfoCard label="Father / Guardian" value={text(profile.resident.father_name || "—")} />
+                    <InfoCard label="Guardian CNIC / Passport" value={text(profile.resident.guardian_cnic || "Not recorded")} />
+                    <InfoCard label="Guardian Phone" value={text(profile.resident.guardian_phone || "Not recorded")} />
+                    <StaffProfileContacts key={profile.resident.id} residentId={profile.resident.id} />
                     <InfoCard label="Phone" value={text(profile.resident.phone || "—")} />
                     <InfoCard label="Email" value={text(profile.resident.email || "—")} />
                     <InfoCard label="Emergency Contact Name" value={text(profile.resident.emergency_contact_name || "Not recorded")} />

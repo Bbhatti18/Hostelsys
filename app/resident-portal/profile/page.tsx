@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import ProfileCompletion from "@/components/residents/ProfileCompletion";
 import { supabase } from "@/lib/supabase";
 import {
   resolveAuthenticatedResident,
@@ -122,6 +123,8 @@ export default function ResidentProfilePage() {
             {error}
           </section>
         )}
+
+        {resident && <ProfileCompletion onSubmitted={values => setResident(current => current ? { ...current, ...values, id: current.id } : current)} />}
 
         {resident && (
           <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">

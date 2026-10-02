@@ -364,6 +364,7 @@ export default function ResidentPortalPage() {
         </aside>
 
         <section className="min-w-0 space-y-6">
+          <Link href="/resident-portal/profile" className="block rounded-2xl border border-indigo-200 bg-indigo-50 px-5 py-4 font-semibold text-indigo-800">Complete Your Profile / View Submitted Details</Link>
           {(message || error) && (
             <div
               className={`rounded-2xl border px-4 py-3 text-sm font-medium ${
@@ -429,6 +430,7 @@ export default function ResidentPortalPage() {
 
           {activeTab === "Profile" && (
             <Card title="My Profile">
+              <Link href="/resident-portal/profile" className="mb-4 inline-flex rounded-xl bg-indigo-600 px-4 py-2 font-semibold text-white">Complete Your Profile / View Submitted Details</Link>
               <InfoGrid
                 items={[
                   ["Name", residentName(resident)],
