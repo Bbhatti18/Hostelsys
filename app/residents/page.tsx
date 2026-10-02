@@ -1068,6 +1068,12 @@ export default function ResidentsPage() {
                     {idCardFileName ? <p className="text-xs text-slate-500">Selected: {idCardFileName}</p> : null}
                   </div>
                 </Field>}
+                {!editingId && <Field label={form.guardian_identity_type === "Passport" ? "Guardian Passport Identity Page" : "Guardian CNIC Front"}>
+                  <div className="space-y-2">
+                    <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handleGuardianFrontSelection} className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100" />
+                    {guardianFrontFileName ? <p className="text-xs text-slate-500">Selected: {guardianFrontFileName}</p> : null}
+                  </div>
+                </Field>}
                 </div>
               </section>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
