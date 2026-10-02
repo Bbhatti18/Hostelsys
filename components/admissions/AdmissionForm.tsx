@@ -20,7 +20,6 @@ import {
   normalizeBedLabel,
 } from "@/lib/bedLabels";
 import {
-  ALLOCATABLE_BED_STATUSES,
   BED_STATUS,
   RESIDENT_STATUS,
   isAllocatableBedStatus,
@@ -79,10 +78,6 @@ const inputClass =
 function createResidentCode() {
   const now = new Date();
   return `RES-${now.getFullYear()}-${`${now.getTime()}`.slice(-8)}`;
-}
-
-function createContractNumber() {
-  return `CNT-${new Date().getFullYear()}-${Date.now().toString().slice(-8)}`;
 }
 
 function isAdmissionRoomStatus(status: string | null) {
@@ -423,320 +418,27 @@ export default function AdmissionForm({
       return;
     }
 
+    let packageSaved = false;
     try {
-      const [residentResult, roomResult, currentAdmissionResult] =
-        await Promise.all([
-          supabase
-            .from("residents")
-            .select("id, status")
-            .eq("id", residentId)
-            .maybeSingle(),
-          supabase
-            .from("rooms")
-            .select("id, status")
-            .eq("id", roomId)
-            .maybeSingle(),
-          supabase
-            .from("admissions")
-            .select("id")
-            .eq("resident_id", residentId)
-            .in("status", ["Active", "Pending"])
-            .limit(1)
-            .maybeSingle(),
-        ]);
-
-      if (residentResult.error) {
-        throw new Error(
-          getSupabaseErrorMessage(
-            residentResult.error,
-            "Unable to verify the selected resident.",
-          ),
-        );
-      }
-      if (!residentResult.data || residentResult.data.status === "Archived") {
-        await loadResidents();
-        setResidentId("");
-        throw new Error("The selected resident is no longer available for admission.");
-      }
-
-      if (roomResult.error) {
-        throw new Error(
-          getSupabaseErrorMessage(
-            roomResult.error,
-            "Unable to verify the selected room.",
-          ),
-        );
-      }
-      if (!roomResult.data || !isAdmissionRoomStatus(roomResult.data.status)) {
-        await loadRoomsAndBeds();
-        setRoomId("");
-        setBedId("");
-        throw new Error("The selected room is no longer available for admission.");
-      }
-
-      const { data: activeAdmission, error: duplicateError } =
-        currentAdmissionResult;
-
-      if (duplicateError) {
-        throw new Error(
-          getSupabaseErrorMessage(
-            duplicateError,
-            "Unable to verify the resident's current admissions.",
-          ),
-        );
-      }
-      if (activeAdmission) {
-        throw new Error("This resident already has a current admission.");
-      }
-
-      const { data: templates, error: templateError } = await supabase
-        .from("contract_templates")
-        .select("id, content")
-        .eq("is_active", true)
-        .order("id", { ascending: false });
-
-      if (templateError) {
-        throw new Error(
-          getSupabaseErrorMessage(
-            templateError,
-            "Unable to verify the active contract template. The admission was not created.",
-          ),
-        );
-      }
-
-      if ((templates ?? []).length === 0) {
-        throw new Error(
-          "No active contract template is available. Activate one standard contract template before creating an admission.",
-        );
-      }
-
-      if ((templates ?? []).length > 1) {
-        throw new Error(
-          "Multiple active contract templates are available. Keep exactly one standard template active before creating an admission.",
-        );
-      }
-
-      const template = templates![0];
-      const standardTerms = (template.content ?? "").trim();
-
-      if (!standardTerms) {
-        throw new Error(
-          "The active contract template has no terms. Complete the standard template before creating an admission.",
-        );
-      }
-
-      let portalLogin;
-      try {
-        portalLogin = await ensureResidentLogin(residentId);
-      } catch (loginError) {
-        throw new Error(
-          `Portal access could not be prepared, so the admission was not created. ${
-            loginError instanceof Error
-              ? loginError.message
-              : "Please try again."
-          }`,
-        );
-      }
-
-      if (occupants.has(bedId)) {
-        const existing = occupants.get(bedId);
-        await loadRoomsAndBeds();
-        setBedId("");
-        throw new Error(
-          `This bed is already occupied by ${existing?.resident_name || "another resident"}. Please select an available bed.`,
-        );
-      }
-
-      const { data: claimedBed, error: claimError } = await supabase
-        .from("beds")
-        .update({ status: BED_STATUS.OCCUPIED })
-        .eq("id", bedId)
-        .eq("room_id", roomId)
-        .in("status", [...ALLOCATABLE_BED_STATUSES])
-        .select("id")
-        .maybeSingle();
-
-      if (claimError) {
-        throw new Error(
-          getSupabaseErrorMessage(
-            claimError,
-            "Unable to allocate this bed. Please select another bed.",
-          ),
-        );
-      }
-      if (!claimedBed) {
-        await loadRoomsAndBeds();
-        setBedId("");
-        throw new Error(
-          "This bed is no longer vacant. Please select another bed.",
-        );
-      }
-
-      // A previous admission does not waive this admission's deposit.
-      const effectiveSecurityDeposit = Number(securityDeposit || 0);
-
-      const { data: admissionData, error: admissionError } = await supabase
-        .from("admissions")
-        .insert({
-          resident_id: residentId,
-          room_id: roomId,
-          bed_id: bedId,
-          admission_date: admissionDate,
-          monthly_rent: Number(monthlyRent),
-          security_deposit: effectiveSecurityDeposit,
-          deposit_status: effectiveSecurityDeposit === 0 ? "Held" : "Pending",
-          status: "Pending",
-        })
-        .select("id")
-        .single();
-
-      if (admissionError) {
-        const { data: releasedBed, error: rollbackError } = await supabase
-          .from("beds")
-          .update({ status: BED_STATUS.VACANT })
-          .eq("id", bedId)
-          .eq("status", BED_STATUS.OCCUPIED)
-          .select("id")
-          .maybeSingle();
-        if (rollbackError || !releasedBed) {
-          throw new Error(
-            "Admission was not saved, and the bed could not be released automatically. Please contact an administrator.",
-          );
-        }
-        throw new Error(
-          getSupabaseErrorMessage(
-            admissionError,
-            "Unable to save the admission. The selected bed was released.",
-          ),
-        );
-      }
-
-      const now = new Date().toISOString();
-      const cleanSpecialClauses = specialClauses.trim();
-      const termsSnapshot = `${standardTerms}${
-        cleanSpecialClauses
-          ? `\n\nSpecial Clauses:\n${cleanSpecialClauses}`
-          : ""
-      }`;
-
-      const { error: contractError } = await supabase.from("contracts").insert({
-        contract_number: createContractNumber(),
-        resident_id: residentId,
-        admission_id: admissionData.id,
-        room_id: roomId,
-        bed_id: bedId,
-        template_id: template.id,
-        contract_content: termsSnapshot,
-        start_date: admissionDate,
-        end_date: null,
-        monthly_rent: Number(monthlyRent),
-        security_deposit: Number(securityDeposit || 0),
-        notice_period_days: 30,
-        status: "Pending Signature",
-        resident_signature_status: "Pending",
-        owner_signature_status: "Pending",
-        signed_by_resident: false,
-        signed_at: null,
-        notes: cleanSpecialClauses || null,
-        created_at: now,
-        updated_at: now,
+      const { data: admissionPackage, error: packageError } = await supabase.rpc("create_admission_package", {
+        p_resident_id: residentId,
+        p_room_id: roomId,
+        p_bed_id: bedId,
+        p_admission_date: admissionDate,
+        p_monthly_rent: Number(monthlyRent),
+        p_security_deposit: Number(securityDeposit || 0),
+        p_special_clauses: specialClauses.trim(),
       });
-
-      if (contractError) {
-        const { data: rolledBackAdmission, error: admissionRollbackError } =
-          await supabase
-          .from("admissions")
-          .delete()
-          .eq("id", admissionData.id)
-          .eq("status", "Pending")
-          .select("id")
-          .maybeSingle();
-
-        if (admissionRollbackError || !rolledBackAdmission) {
-          throw new Error(
-            "The contract could not be prepared and the admission could not be rolled back. Its occupied bed was preserved; please review this admission before trying again.",
-          );
-        }
-
-        const { data: releasedBed, error: bedRollbackError } = await supabase
-          .from("beds")
-          .update({ status: BED_STATUS.VACANT })
-          .eq("id", bedId)
-          .eq("status", BED_STATUS.OCCUPIED)
-          .select("id")
-          .maybeSingle();
-
-        if (bedRollbackError || !releasedBed) {
-          throw new Error(
-            "The contract could not be prepared. The admission was rolled back, but its bed could not be released automatically. Please review the bed allocation before trying again.",
-          );
-        }
-
-        throw new Error(
-          getSupabaseErrorMessage(
-            contractError,
-            `The contract could not be prepared, so the admission was rolled back. Please try again. Detailed error: ${contractError.message || JSON.stringify(contractError)}`,
-            "A non-cancelled contract already exists for this admission.",
-          ),
-        );
+      if (packageError) {
+        throw new Error(["22023", "23514", "23505", "42501"].includes(packageError.code)
+          ? packageError.message
+          : getSupabaseErrorMessage(packageError, "The admission could not be confirmed. Refresh Admissions before retrying."));
       }
-
-      const initialRent = Number(monthlyRent);
-      const admissionMonth = admissionDate.slice(0, 7);
-      const { data: initialRentBill, error: rentBillError } = await supabase
-        .from("bills")
-        .insert({
-          bill_number: `RENT-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
-          resident_id: residentId,
-          admission_id: admissionData.id,
-          billing_month: admissionMonth,
-          due_date: admissionDate,
-          rent_amount: initialRent,
-          total_amount: initialRent,
-          balance_amount: initialRent,
-          bill_status: "Pending",
-          bill_type: "Rent",
-          notes: "Initial rent generated with admission. Future rent is generated by monthly billing.",
-        })
-        .select("id")
-        .single();
-      if (rentBillError) console.error("Failed to generate initial rent bill:", rentBillError);
-      if (initialRentBill?.id) {
-        await requestEventNotification("bill_generated", String(initialRentBill.id), { channels: ["email"] });
+      if (!admissionPackage?.admission_id || !admissionPackage?.rent_bill_id || !admissionPackage?.contract_id) {
+        throw new Error("The admission result could not be confirmed. Refresh Admissions before retrying.");
       }
-      if (effectiveSecurityDeposit > 0) {
-        const { data: depositBillData, error: billError } = await supabase
-          .from("bills")
-          .insert({
-            bill_number: `DEP-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
-            resident_id: residentId,
-            admission_id: admissionData.id,
-            billing_month: "Security Deposit",
-            due_date: new Date(new Date().setDate(new Date().getDate() + 5)).toISOString().split("T")[0],
-            rent_amount: 0,
-            total_amount: effectiveSecurityDeposit,
-            balance_amount: effectiveSecurityDeposit,
-            bill_status: "Pending",
-            bill_type: "Security Deposit",
-            notes: "Auto-generated Security Deposit bill.",
-          })
-          .select("id")
-          .single();
-        if (billError) console.error("Failed to generate security deposit bill:", billError);
-        if (depositBillData?.id) {
-          await requestEventNotification("bill_generated", String(depositBillData.id), { channels: ["email"] });
-        }
-      }
-
-      const [notificationResult, loginNotificationResult] = await Promise.all([
-        requestEventNotification("admission_created", admissionData.id, {
-          channels: communicationChannels,
-        }),
-        requestEventNotification("resident_login_details_sent", admissionData.id, {
-          channels: communicationChannels,
-        }),
-      ]);
-
+      packageSaved = true;
+      // Required records have committed. External failures must never undo them.
       setResidentId("");
       setRoomId("");
       setBedId("");
@@ -744,20 +446,33 @@ export default function AdmissionForm({
       setMonthlyRent("");
       setSecurityDeposit("");
       setSpecialClauses("");
-      setMessage(
-        `Admission saved as Pending and its contract was prepared for resident signature.${
-          portalLogin.created && portalLogin.temporaryPassword
-            ? ` Portal login: ${portalLogin.email} | One-time temporary password: ${portalLogin.temporaryPassword} (${portalLogin.emailSent ? "Credentials sent via email" : "Provide to resident now; not stored in database"}).`
-            : ` Portal access is ready for ${portalLogin.email}.`
-        }${notificationWarning(notificationResult)}${notificationWarning(loginNotificationResult)}`,
-      );
+
+      let portalMessage = "";
+      let portalReady = false;
+      try {
+        const portalLogin = await ensureResidentLogin(residentId);
+        portalReady = true;
+        portalMessage = portalLogin.created && portalLogin.temporaryPassword
+          ? ` Portal login: ${portalLogin.email} | One-time temporary password: ${portalLogin.temporaryPassword} (${portalLogin.emailSent ? "Credentials sent via email" : "Provide to resident now; not stored in database"}).`
+          : ` Portal access is ready for ${portalLogin.email}.`;
+      } catch (loginError) {
+        portalMessage = ` Admission was saved, but portal access could not be prepared. ${loginError instanceof Error ? loginError.message : "Please provision access later."}`;
+      }
+      const notificationResults = await Promise.all([
+        requestEventNotification("bill_generated", admissionPackage.rent_bill_id, { channels: ["email"] }),
+        ...(admissionPackage.deposit_bill_id
+          ? [requestEventNotification("bill_generated", admissionPackage.deposit_bill_id, { channels: ["email"] })] : []),
+        requestEventNotification("admission_created", admissionPackage.admission_id, { channels: communicationChannels }),
+        ...(portalReady ? [requestEventNotification("resident_login_details_sent", admissionPackage.admission_id, { channels: communicationChannels })] : []),
+      ]);
+      setMessage(`Admission saved as Pending and its contract was prepared for resident signature.${portalMessage}${notificationResults.some(result => result.warning) ? notificationWarning({ delivered: false, configurationRequired: false, warning: true }) : ""}`);
       await Promise.all([loadRoomsAndBeds(), onSaved()]);
     } catch (saveError) {
-      setError(
-        saveError instanceof Error
-          ? saveError.message
-          : "Unable to save admission.",
-      );
+      if (packageSaved) {
+        setMessage(current => (current || "Admission and required bills/contract were saved as Pending.") + " A follow-up action failed. Refresh Admissions; do not create this admission again.");
+      } else {
+        setError(saveError instanceof Error ? saveError.message : "Unable to save admission.");
+      }
     } finally {
       setSaving(false);
     }
