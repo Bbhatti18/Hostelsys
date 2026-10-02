@@ -7,7 +7,7 @@ export const REPORT_COLUMNS = {
   residents: "id, resident_code, full_name, phone, cnic, email, status, created_at",
   rooms: "id, room_number, floor_number, total_beds, status, created_at",
   beds: "id, room_id, bed_number, status, created_at",
-  admissions: "id, resident_id, room_id, bed_id, admission_number, admission_date, expected_leaving_date, security_deposit, monthly_rent, status, created_at",
+  admissions: "id, resident_id, room_id, bed_id, allocation_mode, admission_number, admission_date, expected_leaving_date, security_deposit, monthly_rent, status, created_at",
   bills: "id, resident_id, admission_id, bill_number, bill_type, billing_month, rent_amount, electricity_amount, ac_amount, other_amount, discount_amount, total_amount, paid_amount, balance_amount, due_date, bill_status, created_at",
   payments: "id, resident_id, bill_id, payment_number, payment_date, amount, payment_status, payment_method, reference_number, verified_at, created_at, payment_allocations(payment_id,bill_id,amount)",
   contracts: "id, resident_id, admission_id, contract_number, start_date, end_date, monthly_rent, status, resident_signature_status, owner_signature_status, signed_by_resident, created_at",

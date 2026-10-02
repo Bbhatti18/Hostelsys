@@ -66,7 +66,7 @@ export default function DashboardPage() {
     try {
       const results = await Promise.all([
         supabase.from("residents").select("id,full_name,resident_code,status,created_at,updated_at").order("created_at", { ascending: false }),
-        supabase.from("admissions").select("id,admission_number,resident_id,room_id,bed_id,admission_date,monthly_rent,security_deposit,status,deposit_status,expected_leaving_date,created_at,updated_at").order("created_at", { ascending: false }),
+        supabase.from("admissions").select("id,admission_number,resident_id,room_id,bed_id,allocation_mode,admission_date,monthly_rent,security_deposit,status,deposit_status,expected_leaving_date,created_at,updated_at").order("created_at", { ascending: false }),
         supabase.from("contracts").select("id,contract_number,resident_id,admission_id,status,resident_signature_url,resident_signature_status,signed_by_resident,signed_at,contract_content,created_at,updated_at").order("created_at", { ascending: false }),
         supabase.from("bills").select("id,bill_number,resident_id,admission_id,billing_month,bill_type,rent_amount,electricity_amount,ac_amount,other_amount,discount_amount,total_amount,due_date,bill_status,created_at,updated_at").order("created_at", { ascending: false }),
         supabase.from("payments").select("id,payment_number,bill_id,resident_id,amount,payment_status,verified_at,created_at,updated_at,payment_allocations(payment_id,bill_id,amount)").order("created_at", { ascending: false }),

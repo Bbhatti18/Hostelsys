@@ -172,7 +172,7 @@ export default function RoomsPage() {
         .order("bed_number", { ascending: true }),
       supabase
         .from("admissions")
-        .select("id, room_id, bed_id, resident_id, status, admission_date, residents(id, full_name, resident_code, phone)")
+        .select("id, room_id, bed_id, resident_id, allocation_mode, status, admission_date, residents(id, full_name, resident_code, phone)")
         .in("status", ["Active", "Pending"]),
     ]);
 
@@ -833,11 +833,12 @@ export default function RoomsPage() {
           </section>
         )}
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
           <StatCard label="Total Rooms" value={loading ? "..." : stats.total} />
           <StatCard label="Available" value={loading || !relationshipsVerified ? "..." : stats.available} />
           <StatCard label="Occupied" value={loading || !relationshipsVerified ? "..." : stats.occupied} />
           <StatCard label="Maintenance" value={loading ? "..." : stats.maintenance} />
+          <StatCard label="Exclusive Rooms" value={loading || !relationshipsVerified ? "..." : stats.exclusive} />
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -860,6 +861,7 @@ export default function RoomsPage() {
               <option value="Partially Occupied">
                 Partially Occupied
               </option>
+              <option value="Exclusively Occupied">Exclusively Occupied</option>
               <option value="Maintenance">Maintenance</option>
               <option value="Inactive">Inactive</option>
             </select>
@@ -966,7 +968,7 @@ export default function RoomsPage() {
                           <td className="whitespace-nowrap px-5 py-4">
                             <div className="flex items-center gap-2">
                               <span className="text-sm font-bold text-slate-900">
-                                {occupiedCount} / {roomOccupancy.capacity} Occupied
+                                {occupiedCount} resident{occupiedCount === 1 ? "" : "s"} · {roomOccupancy.unavailable}/{roomOccupancy.capacity} unavailable · {roomOccupancy.available} available
                               </span>
                               <button
                                 type="button"
@@ -1093,6 +1095,7 @@ export default function RoomsPage() {
                                     <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700">
                                       {occupiedCount} Occupied
                                     </span>
+                                    {roomOccupancy.blocked > 0 && <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-800">{roomOccupancy.blocked} Blocked by Exclusive</span>}
                                     {room.status !== "Inactive" && (
                                       <button
                                         type="button"
@@ -1180,8 +1183,10 @@ export default function RoomsPage() {
                                               </span>
                                               <button
                                                 type="button"
+                                                disabled={bed.blockedByExclusive}
                                                 onClick={() => void handleRemoveBedFromRoom(bed, room)}
-                                                className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50/70 px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-100 hover:border-red-300 transition"
+                                                title={bed.blockedByExclusive ? "This bed is reserved while the room has a current exclusive admission." : "Remove bed"}
+                                                className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50/70 px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-100 hover:border-red-300 transition disabled:cursor-not-allowed disabled:opacity-40"
                                               >
                                                 <svg
                                                   className="h-3 w-3"
@@ -1287,6 +1292,8 @@ function statusClass(status: string) {
       return "bg-emerald-100 text-emerald-700";
     case "Fully Occupied":
       return "bg-red-100 text-red-700";
+    case "Exclusively Occupied":
+      return "bg-amber-100 text-amber-800";
     case "Partially Occupied":
       return "bg-amber-100 text-amber-700";
     case "Maintenance":

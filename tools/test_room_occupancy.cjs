@@ -12,7 +12,7 @@ function load(name) {
   }).outputText,{module:mod,exports:mod.exports,require:load});
   return mod.exports;
 }
-const {buildRoomOccupancy: build, summarizeRoomOccupancy: summary, matchesRoomStatus: matches} = load('roomOccupancy');
+const {buildRoomOccupancy: build, summarizeRoomOccupancy: summary, summarizeBedInventory: inventory, matchesRoomStatus: matches} = load('roomOccupancy');
 function fixture(occupied,capacity,id='r',status='Available') {
   const room={id,status,total_beds:99}; // Stored/manual capacity must not drive the denominator.
   const beds=Array.from({length:capacity},(_,i)=>({id:`${id}-b${i}`,room_id:id,status:i<occupied?'Occupied':'Vacant'}));
@@ -40,6 +40,28 @@ for(const status of ['Active','Pending']) {
   const f=fixture(1,2);f.admissions[0].status=status;f.beds[0].status='Vacant';
   const row=build(f.room,f.beds,f.admissions);
   assert.equal(row.occupied,1);assert.equal(row.available,1,'Current assignment overrides stale Vacant bed flag');
+}
+{
+  const single=fixture(1,3,'single');
+  const singleRow=build(single.room,single.beds,single.admissions);
+  assert.equal(singleRow.occupied,1);assert.equal(singleRow.blocked,0);assert.equal(singleRow.available,2);assert.equal(singleRow.status,'Partially Occupied');
+  const exclusive=fixture(1,3,'exclusive');exclusive.admissions[0].allocation_mode='whole_room';
+  const exclusiveRow=build(exclusive.room,exclusive.beds,exclusive.admissions);
+  assert.equal(exclusiveRow.occupied,1,'Blocked beds do not count as residents or physically occupied beds');
+  assert.equal(exclusiveRow.blocked,2);assert.equal(exclusiveRow.unavailable,3);assert.equal(exclusiveRow.available,0);assert.equal(exclusiveRow.status,'Exclusively Occupied');
+  assert.equal(exclusiveRow.beds.filter(b=>b.blockedByExclusive).length,2);
+  assert.equal(exclusiveRow.beds.filter(b=>b.displayStatus==='Blocked by Whole-Room Allocation').length,2);
+  assert.equal(summary([exclusiveRow]).blocked,2);
+  assert.ok(exclusive.beds.slice(1).every(b=>b.status==='Vacant'),'Exclusivity is derived without mutating physical bed status');
+  const dashboardInventory=inventory([exclusive.room],exclusive.beds,exclusive.admissions);
+  assert.equal(dashboardInventory.total,3);assert.equal(dashboardInventory.occupied,1);assert.equal(dashboardInventory.bookable,0);assert.equal(dashboardInventory.blocked,2);
+  const historical=fixture(1,3,'historical');delete historical.admissions[0].allocation_mode;
+  const historicalRow=build(historical.room,historical.beds,historical.admissions);
+  assert.equal(historicalRow.available,2,'Rows without an explicit mode remain Single Bed');
+  const inconsistent=fixture(0,3,'exclusive-inconsistent');
+  inconsistent.admissions.push({id:'exclusive-invalid-primary',resident_id:'resident',room_id:inconsistent.room.id,bed_id:'missing',status:'Active',allocation_mode:'whole_room'});
+  const failClosed=build(inconsistent.room,inconsistent.beds,inconsistent.admissions);
+  assert.equal(failClosed.occupied,0);assert.equal(failClosed.available,0);assert.equal(failClosed.blocked,3);
 }
 for(const status of ['Inactive','Archived','Maintenance']) {
   const f=fixture(1,2);f.beds[0].status=status;

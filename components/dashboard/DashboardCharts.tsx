@@ -16,22 +16,32 @@ import {
 } from "recharts";
 
 import type { DashboardData } from "@/lib/dashboardData";
+import { summarizeBedInventory } from "@/lib/roomOccupancy";
 
 export default function DashboardCharts({ data }: { data: DashboardData }) {
-  const { beds, payments } = data;
+  const { beds, payments, rooms, admissions } = data;
 
   const occupancyData = useMemo(() => {
-    const totalBeds = beds.length;
-    const occupiedBeds = beds.filter((bed: any) => bed.status === "Occupied").length;
-    const availableBeds = beds.filter((bed: any) => bed.status === "Vacant").length;
+    const inventory = summarizeBedInventory(
+      rooms as Array<{ id: string; status: string | null }>,
+      beds as Array<{ id: string; room_id: string; status: string | null }>,
+      admissions as Array<{ id: string; room_id: string | null; bed_id: string | null; resident_id: string; status: string | null; allocation_mode?: string | null }>,
+    );
+    const totalBeds = inventory.total;
+    const occupiedBeds = inventory.occupied;
+    const availableBeds = inventory.bookable;
+    const blockedBeds = inventory.blocked;
     const inactiveBeds = beds.filter((bed: any) => bed.status === "Inactive").length;
+    const reviewBeds = Math.max(0, totalBeds - occupiedBeds - availableBeds - blockedBeds - inactiveBeds);
 
     return [
       { name: "Occupied", value: occupiedBeds },
       { name: "Vacant", value: availableBeds },
+      ...(blockedBeds > 0 ? [{ name: "Blocked by Whole-Room Allocation", value: blockedBeds }] : []),
+      ...(reviewBeds > 0 ? [{ name: "Unavailable / Review", value: reviewBeds }] : []),
       ...(inactiveBeds > 0 ? [{ name: "Inactive", value: inactiveBeds }] : []),
     ];
-  }, [beds]);
+  }, [beds, rooms, admissions]);
 
   const revenueData = useMemo(() => {
     const months = new Map<string, number>();
@@ -62,7 +72,7 @@ export default function DashboardCharts({ data }: { data: DashboardData }) {
     }));
   }, [payments]);
 
-  const COLORS = ["#4f46e5", "#10b981", "#94a3b8"];
+  const COLORS = ["#4f46e5", "#10b981", "#f59e0b", "#94a3b8"];
 
   const formatCurrency = (value: number) => `Rs ${value.toLocaleString()}`;
 

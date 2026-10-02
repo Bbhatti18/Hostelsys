@@ -1,16 +1,23 @@
 import { buildResidentFinancialSummary } from "@/lib/residentFinancialSummary";
+import { summarizeBedInventory } from "@/lib/roomOccupancy";
 import { useMemo } from "react";
 import type { DashboardData } from "@/lib/dashboardData";
 
 export default function DashboardStats({ data }: { data: DashboardData }) {
-  const { residents, bills, payments, beds, admissions } = data;
+  const { residents, bills, payments, beds, admissions, rooms } = data;
 
   const stats = useMemo(() => {
     // 1. Total Residents (Active)
     const totalResidents = residents.filter(r => r.status === "Active").length;
 
     // 2. Room Occupancy & Bed Occupancy
-    const occupiedBeds = beds.filter(b => b.status === "Occupied").length;
+    const bedInventory = summarizeBedInventory(
+      rooms as Array<{ id: string; status: string | null }>,
+      beds as Array<{ id: string; room_id: string; status: string | null }>,
+      admissions as Array<{ id: string; room_id: string | null; bed_id: string | null; resident_id: string; status: string | null; allocation_mode?: string | null }>,
+    );
+    const occupiedBeds = bedInventory.occupied;
+    const bookableBeds = bedInventory.bookable;
     const totalBeds = beds.length;
     const bedOccupancyRate = totalBeds > 0 ? Math.round((occupiedBeds / totalBeds) * 100) : 0;
 
@@ -26,12 +33,13 @@ export default function DashboardStats({ data }: { data: DashboardData }) {
     return {
       totalResidents,
       occupiedBeds,
+      bookableBeds,
       totalBeds,
       bedOccupancyRate,
       totalRevenue,
       totalOutstanding,
     };
-  }, [residents, bills, payments, beds, admissions]);
+  }, [residents, bills, payments, beds, admissions, rooms]);
 
   const money = (val: number) => `Rs ${val.toLocaleString()}`;
 
@@ -39,7 +47,7 @@ export default function DashboardStats({ data }: { data: DashboardData }) {
     { label: "Active Residents", value: stats.totalResidents, color: "text-blue-600 dark:text-blue-400" },
     { label: "Total Revenue", value: money(stats.totalRevenue), color: "text-emerald-600 dark:text-emerald-400" },
     { label: "Current Admission Dues", value: money(stats.totalOutstanding), color: "text-red-600 dark:text-red-400" },
-    { label: "Bed Occupancy", value: `${stats.bedOccupancyRate}%`, sub: `${stats.occupiedBeds} / ${stats.totalBeds} beds`, color: "text-indigo-600 dark:text-indigo-400" },
+    { label: "Bed Occupancy", value: `${stats.bedOccupancyRate}%`, sub: `${stats.occupiedBeds} physically occupied / ${stats.bookableBeds} bookable`, color: "text-indigo-600 dark:text-indigo-400" },
   ];
 
   return (

@@ -15,14 +15,13 @@ import {
 } from "@/lib/notifications/client";
 import type { NotificationChannel } from "@/lib/notifications/types";
 import { getSupabaseErrorMessage } from "@/lib/supabaseErrors";
+import { buildRoomOccupancy } from "@/lib/roomOccupancy";
 import {
   compareBedRecordsAscending,
   normalizeBedLabel,
 } from "@/lib/bedLabels";
 import {
-  BED_STATUS,
   RESIDENT_STATUS,
-  isAllocatableBedStatus,
 } from "@/lib/statuses";
 
 type Resident = {
@@ -48,13 +47,14 @@ type Bed = {
   status: string | null;
 };
 
+type AllocationMode = "single_bed" | "whole_room";
+
 type AdmissionOccupant = {
-  admission_id: string;
-  bed_id: string;
-  resident_name: string;
-  resident_code: string | null;
-  status: string | null;
+  admission_id: string; bed_id: string; room_id: string; resident_id: string;
+  allocation_mode: AllocationMode; resident_name: string;
+  resident_code: string | null; status: string | null;
 };
+type CurrentAdmission = { id: string; room_id: string; bed_id: string; resident_id: string; allocation_mode: AllocationMode; status: string; resident_name: string };
 
 type ResidentForm = {
   fullName: string;
@@ -106,6 +106,7 @@ export default function AdmissionForm({
   const [residentId, setResidentId] = useState("");
   const [roomId, setRoomId] = useState("");
   const [bedId, setBedId] = useState("");
+  const [allocationMode, setAllocationMode] = useState<AllocationMode>("single_bed");
   const [admissionDate, setAdmissionDate] = useState("");
   const [monthlyRent, setMonthlyRent] = useState("");
   const [securityDeposit, setSecurityDeposit] = useState("");
@@ -114,6 +115,7 @@ export default function AdmissionForm({
   const [rooms, setRooms] = useState<Room[]>([]);
   const [beds, setBeds] = useState<Bed[]>([]);
   const [occupants, setOccupants] = useState<Map<string, AdmissionOccupant>>(new Map());
+  const [currentAdmissions, setCurrentAdmissions] = useState<CurrentAdmission[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -168,7 +170,7 @@ export default function AdmissionForm({
         .order("bed_number", { ascending: true }),
       supabase
         .from("admissions")
-        .select("id, bed_id, room_id, status, residents(id, full_name, resident_code)")
+        .select("id, bed_id, room_id, allocation_mode, status, residents(id, full_name, resident_code)")
         .in("status", ["Active", "Pending"]),
     ]);
 
@@ -188,14 +190,22 @@ export default function AdmissionForm({
         ),
       );
     }
+    if (admissionsResult.error) {
+      throw new Error(getSupabaseErrorMessage(admissionsResult.error, "Unable to verify current room allocations."));
+    }
 
     const occupantMap = new Map<string, AdmissionOccupant>();
+    const currentRoomAdmissions: CurrentAdmission[] = [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ((admissionsResult.data ?? []) as any[]).forEach((item) => {
+      currentRoomAdmissions.push({ id: item.id, room_id: item.room_id, bed_id: item.bed_id, resident_id: item.residents?.id || "", allocation_mode: item.allocation_mode === "whole_room" ? "whole_room" : "single_bed", status: item.status, resident_name: item.residents?.full_name || "Resident" });
       if (item.bed_id) {
         occupantMap.set(item.bed_id, {
           admission_id: item.id,
           bed_id: item.bed_id,
+          room_id: item.room_id,
+          resident_id: item.residents?.id || "",
+          allocation_mode: item.allocation_mode === "whole_room" ? "whole_room" : "single_bed",
           resident_name: item.residents?.full_name || "Resident",
           resident_code: item.residents?.resident_code || null,
           status: item.status,
@@ -210,6 +220,7 @@ export default function AdmissionForm({
     );
     setBeds((bedResult.data ?? []) as Bed[]);
     setOccupants(occupantMap);
+    setCurrentAdmissions(currentRoomAdmissions);
   }, []);
 
   useEffect(() => {
@@ -254,29 +265,26 @@ export default function AdmissionForm({
     [beds, roomId],
   );
 
-  const availableBeds = useMemo(
-    () =>
-      roomBedsList.filter(
-        (bed) =>
-          isAllocatableBedStatus(bed.status) && !occupants.has(bed.id),
-      ),
-    [roomBedsList, occupants],
-  );
+  const availableBeds = useMemo(() => {
+    const room = rooms.find(item => item.id === roomId);
+    return room ? buildRoomOccupancy(room, roomBedsList, currentAdmissions).beds.filter(bed => bed.assignable) : [];
+  }, [rooms, roomBedsList, currentAdmissions, roomId]);
+
+  const occupantsByRoom = useMemo(() => {
+    const grouped = new Map<string, typeof currentAdmissions>();
+    currentAdmissions.forEach(admission => grouped.set(admission.room_id, [...(grouped.get(admission.room_id) ?? []), admission]));
+    return grouped;
+  }, [currentAdmissions]);
 
   const roomBedStats = useMemo(() => {
     const stats = new Map<string, { total: number; available: number; occupied: number }>();
     rooms.forEach((r) => {
       const roomAllBeds = beds.filter((b) => String(b.room_id) === String(r.id));
-      const available = roomAllBeds.filter(
-        (b) => isAllocatableBedStatus(b.status) && !occupants.has(b.id),
-      ).length;
-      const occupied = roomAllBeds.filter(
-        (b) => b.status === BED_STATUS.OCCUPIED || occupants.has(b.id),
-      ).length;
-      stats.set(r.id, { total: roomAllBeds.length, available, occupied });
+      const occupancy = buildRoomOccupancy(r, roomAllBeds, currentAdmissions);
+      stats.set(r.id, { total: occupancy.capacity, available: occupancy.available, occupied: occupancy.occupied });
     });
     return stats;
-  }, [rooms, beds, occupants]);
+  }, [rooms, beds, currentAdmissions]);
 
   function closeResidentModal() {
     if (savingResident) return;
@@ -428,6 +436,7 @@ export default function AdmissionForm({
         p_monthly_rent: Number(monthlyRent),
         p_security_deposit: Number(securityDeposit || 0),
         p_special_clauses: specialClauses.trim(),
+        p_allocation_mode: allocationMode,
       });
       if (packageError) {
         throw new Error(["22023", "23514", "23505", "42501"].includes(packageError.code)
@@ -442,6 +451,7 @@ export default function AdmissionForm({
       setResidentId("");
       setRoomId("");
       setBedId("");
+      setAllocationMode("single_bed");
       setAdmissionDate("");
       setMonthlyRent("");
       setSecurityDeposit("");
@@ -546,6 +556,15 @@ export default function AdmissionForm({
             </label>
 
             <label>
+              <span className="mb-2 block text-sm font-semibold text-slate-700">Allocation Type *</span>
+              <select required value={allocationMode} onChange={(event) => { setAllocationMode(event.target.value as AllocationMode); setRoomId(""); setBedId(""); }} className={inputClass} disabled={loading || saving}>
+                <option value="single_bed">Single Bed</option>
+                <option value="whole_room">Whole Room (Exclusive)</option>
+              </select>
+              {allocationMode === "whole_room" && <span className="mt-2 block text-xs text-slate-600">Books the entire room for this resident. No other bed in this room can be allocated while this admission is current.</span>}
+            </label>
+
+            <label>
               <span className="mb-2 block text-sm font-semibold text-slate-700">
                 Room *
               </span>
@@ -564,10 +583,16 @@ export default function AdmissionForm({
                   const stat = roomBedStats.get(room.id);
                   const availableCount = stat ? stat.available : 0;
                   const totalCount = stat ? stat.total : 0;
-                  const isFull = availableCount === 0 && totalCount > 0;
+                  const currentRoomAdmissions = occupantsByRoom.get(room.id) ?? [];
+                  const exclusive = currentRoomAdmissions.some(admission => admission.allocation_mode === "whole_room");
+                  const roomHasCurrentAdmission = currentRoomAdmissions.length > 0;
+                  const eligible = allocationMode === "whole_room"
+                    ? availableCount === totalCount && totalCount > 0 && !roomHasCurrentAdmission
+                    : availableCount > 0 && !exclusive;
+                  const isFull = !eligible && totalCount > 0;
                   return (
-                    <option key={room.id} value={room.id}>
-                      Room {room.room_number} ({availableCount} of {totalCount} beds available){isFull ? " — FULL" : ""}
+                    <option key={room.id} value={room.id} disabled={!eligible}>
+                      Room {room.room_number} ({allocationMode === "whole_room" ? `${totalCount} beds` : `${availableCount} of ${totalCount} beds available`}){exclusive ? " — WHOLE ROOM RESERVED" : isFull ? " — UNAVAILABLE" : ""}
                     </option>
                   );
                 })}
@@ -594,8 +619,7 @@ export default function AdmissionForm({
                 </option>
                 {roomBedsList.map((bed) => {
                   const occupant = occupants.get(bed.id);
-                  const isAvailable =
-                    isAllocatableBedStatus(bed.status) && !occupant;
+                  const isAvailable = availableBeds.some(item => item.id === bed.id);
                   if (isAvailable) {
                     return (
                       <option key={bed.id} value={bed.id}>
@@ -605,7 +629,8 @@ export default function AdmissionForm({
                   }
                   return (
                     <option key={bed.id} value={bed.id} disabled>
-                      🔴 {normalizeBedLabel(bed.bed_number)} — Occupied by {occupant?.resident_name || "Resident"} (Unavailable)
+                      🔴 {normalizeBedLabel(bed.bed_number)} — {occupant ? `Occupied by ${occupant.resident_name}` : currentAdmissions.some(admission => admission.room_id === roomId && admission.allocation_mode === "whole_room") ? "Blocked by Whole-Room Allocation" : `${bed.status} (Unavailable)`}
+                                      {availableBeds.length} Available / {roomBedStats.get(roomId)?.total ?? 0} Active Beds
                     </option>
                   );
                 })}
@@ -638,7 +663,7 @@ export default function AdmissionForm({
             </label>
           </div>
 
-          {roomId && (
+              {roomId && (
             <div
               className={`rounded-2xl border p-4 text-sm ${
                 availableBeds.length === 0
@@ -651,14 +676,13 @@ export default function AdmissionForm({
                   Room {rooms.find((r) => r.id === roomId)?.room_number} Bed Allocation Status:
                 </p>
                 <span className="rounded-full bg-white px-3 py-1 text-xs font-bold uppercase tracking-wider text-slate-700 shadow-xs">
-                  {availableBeds.length} Available / {roomBedsList.length} Total Beds
+                  {availableBeds.length} Available / {roomBedStats.get(roomId)?.total ?? 0} Active Beds
                 </span>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
                 {roomBedsList.map((bed) => {
                   const occupant = occupants.get(bed.id);
-                  const isAvailable =
-                    isAllocatableBedStatus(bed.status) && !occupant;
+                  const isAvailable = availableBeds.some(item => item.id === bed.id);
                   const isSelected = bedId === bed.id;
                   return (
                     <button
@@ -692,7 +716,7 @@ export default function AdmissionForm({
                         <span>{isSelected ? "Selected ✓" : "Available"}</span>
                       ) : (
                         <span className="font-semibold text-slate-700">
-                          Occupied by {occupant?.resident_name || "Resident"}
+                          {occupant ? `Occupied by ${occupant.resident_name}` : allocationMode === "single_bed" && occupantsByRoom.get(roomId)?.some(admission => admission.allocation_mode === "whole_room") ? "Blocked by Whole-Room Allocation" : "Unavailable"}
                         </span>
                       )}
                     </button>
@@ -701,7 +725,7 @@ export default function AdmissionForm({
               </div>
               {availableBeds.length === 0 && (
                 <p className="mt-2.5 text-xs font-semibold text-amber-800">
-                  ⚠️ This room has no available beds. All beds are occupied. Please select another room above.
+                  This room has no beds available under the selected allocation type. Select another eligible room.
                 </p>
               )}
             </div>

@@ -18,6 +18,7 @@ import {
   type BedCapacityResult,
 } from "@/lib/bedProvisioning";
 import { getSupabaseErrorMessage } from "@/lib/supabaseErrors";
+import { buildRoomOccupancy, summarizeBedInventory, type OccupancyAdmission } from "@/lib/roomOccupancy";
 import {
   canonicalBedLabelKey,
   compareBedRecordsAscending,
@@ -33,7 +34,7 @@ import {
   isVacantBedStatus,
 } from "@/lib/statuses";
 
-type RoomStatus = "Available" | "Occupied" | "Maintenance" | "Inactive";
+type RoomStatus = "Available" | "Occupied" | "Partially Occupied" | "Exclusively Occupied" | "Maintenance" | "Inactive";
 
 type Room = {
   id: string;
@@ -68,6 +69,7 @@ type Bed = {
   mattress_cover: string | null;
   created_at: string;
   occupant?: BedOccupantInfo | null;
+  blockedByExclusive?: boolean;
 };
 
 type RoomForm = {
@@ -114,13 +116,15 @@ const inputClass =
 function roomStatusClass(status: RoomStatus) {
   if (status === "Available") return "bg-emerald-100 text-emerald-700";
   if (status === "Occupied") return "bg-blue-100 text-blue-700";
+  if (status === "Exclusively Occupied") return "bg-amber-100 text-amber-800";
   if (status === "Maintenance") return "bg-amber-100 text-amber-700";
   return "bg-slate-200 text-slate-700";
 }
 
-function bedStatusClass(status: Bed["status"]) {
+function bedStatusClass(status: string) {
   if (status === "Vacant") return "bg-emerald-100 text-emerald-700";
   if (status === "Occupied") return "bg-blue-100 text-blue-700";
+  if (status.startsWith("Blocked")) return "bg-amber-100 text-amber-800";
   return "bg-slate-200 text-slate-700";
 }
 
@@ -135,6 +139,7 @@ function money(value: number | null) {
 export default function RoomsPage() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [beds, setBeds] = useState<Bed[]>([]);
+  const [roomAdmissions, setRoomAdmissions] = useState<OccupancyAdmission[]>([]);
   const [referencedBedIds, setReferencedBedIds] = useState<Set<string>>(
     new Set(),
   );
@@ -170,7 +175,7 @@ export default function RoomsPage() {
         supabase.from("beds").select("*").order("bed_number"),
         supabase
           .from("admissions")
-          .select("id, bed_id, room_id, resident_id, status, admission_date, residents(id, full_name, resident_code, phone)")
+          .select("id, bed_id, room_id, resident_id, allocation_mode, status, admission_date, residents(id, full_name, resident_code, phone)")
           .in("status", ["Active", "Pending"]),
       ]);
 
@@ -198,7 +203,9 @@ export default function RoomsPage() {
     }
 
     const occupantMap = new Map<string, BedOccupantInfo>();
+    const activeAdmissions = (admissionData ?? []) as Array<OccupancyAdmission & { residents?: { id?: string; full_name?: string; resident_code?: string; phone?: string } | null }>;
     if (!admissionError && admissionData) {
+      setRoomAdmissions(admissionData as OccupancyAdmission[]);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (admissionData as any[]).forEach((adm) => {
         if (adm.bed_id && adm.residents) {
@@ -222,14 +229,17 @@ export default function RoomsPage() {
       );
       setBeds([]);
     } else {
+      const exclusiveRooms = new Set(activeAdmissions.filter(admission => admission.allocation_mode === "whole_room").map(admission => admission.room_id));
       const mappedBeds: Bed[] = ((bedsData ?? []) as Bed[]).map((bed) => ({
         ...bed,
         occupant: occupantMap.get(bed.id) ?? null,
+        blockedByExclusive: exclusiveRooms.has(bed.room_id) && bed.status === BED_STATUS.VACANT && !occupantMap.has(bed.id),
       }));
       setBeds(mappedBeds);
     }
 
     if (admissionError) {
+      setRoomAdmissions([]);
       setError((current) =>
         current
           ? `${current} | Unable to verify room and bed references.`
@@ -278,32 +288,30 @@ export default function RoomsPage() {
         String(room.floor_number ?? "").toLowerCase().includes(query) ||
         (room.room_type ?? "").toLowerCase().includes(query);
 
-      const matchesStatus =
-        statusFilter === "All" || room.status === statusFilter;
+      const matchesStatus = statusFilter === "All" || buildRoomOccupancy(
+        room as { id: string; status: string | null }, beds, roomAdmissions,
+      ).status === statusFilter;
 
       return matchesSearch && matchesStatus;
     });
-  }, [rooms, search, statusFilter]);
+  }, [rooms, beds, roomAdmissions, search, statusFilter]);
 
   const summary = useMemo(() => {
-    const totalBeds = beds.filter((bed) =>
-      isOperationalBedStatus(bed.status),
-    ).length;
-    const occupiedBeds = beds.filter(
-      (bed) => bed.status === BED_STATUS.OCCUPIED,
-    ).length;
-    const vacantBeds = beds.filter((bed) =>
-      isVacantBedStatus(bed.status),
-    ).length;
+    const inventory = summarizeBedInventory(rooms as Array<{ id: string; status: string | null }>, beds, roomAdmissions);
+    const totalBeds = inventory.active;
+    const occupiedBeds = inventory.occupied;
+    const vacantBeds = inventory.bookable;
+    const blockedBeds = inventory.blocked;
 
     return {
       totalRooms: rooms.length,
-      availableRooms: rooms.filter((room) => room.status === "Available").length,
+      availableRooms: rooms.filter((room) => buildRoomOccupancy(room as { id: string; status: string | null }, beds, roomAdmissions).available > 0).length,
       totalBeds,
       occupiedBeds,
       vacantBeds,
+      blockedBeds,
     };
-  }, [rooms, beds]);
+  }, [rooms, beds, roomAdmissions]);
 
   const roomsWithBedCapacity = useMemo(
     () =>
@@ -954,7 +962,7 @@ export default function RoomsPage() {
           </section>
         )}
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
           <StatCard label="Total Rooms" value={String(summary.totalRooms)} />
           <StatCard
             label="Available Rooms"
@@ -965,7 +973,8 @@ export default function RoomsPage() {
             label="Occupied Beds"
             value={String(summary.occupiedBeds)}
           />
-          <StatCard label="Vacant Beds" value={String(summary.vacantBeds)} />
+          <StatCard label="Bookable Vacant Beds" value={String(summary.vacantBeds)} />
+                          <StatCard label="Blocked by Exclusive" value={String(summary.blockedBeds)} />
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -984,6 +993,9 @@ export default function RoomsPage() {
             >
               <option value="All">All Statuses</option>
               <option value="Available">Available</option>
+              <option value="Partially Occupied">Partially Occupied</option>
+              <option value="Fully Occupied">Fully Occupied</option>
+              <option value="Exclusively Occupied">Exclusively Occupied</option>
               <option value="Occupied">Occupied</option>
               <option value="Maintenance">Maintenance</option>
               <option value="Inactive">Inactive</option>
@@ -1010,6 +1022,7 @@ export default function RoomsPage() {
             ) : (
               filteredRooms.map((room) => {
                 const roomBeds = beds.filter((bed) => bed.room_id === room.id);
+                const roomOccupancy = buildRoomOccupancy(room as { id: string; status: string | null }, roomBeds, roomAdmissions);
                 const activeRoomBeds = roomBeds
                   .filter((bed) => isOperationalBedStatus(bed.status))
                   .sort(compareBedRecordsAscending);
@@ -1017,9 +1030,7 @@ export default function RoomsPage() {
                   .filter((bed) => bed.status === BED_STATUS.INACTIVE)
                   .sort(compareBedRecordsAscending);
                 const inactiveExpanded = expandedInactiveRoomIds.has(room.id);
-                const occupied = activeRoomBeds.filter(
-                  (bed) => bed.status === BED_STATUS.OCCUPIED,
-                ).length;
+                const occupied = roomOccupancy.occupied;
                 const roomHasLinks =
                   roomBeds.length > 0 || referencedRoomIds.has(room.id);
                 const canAddBed = room.status !== "Inactive";
@@ -1040,10 +1051,10 @@ export default function RoomsPage() {
                           </h2>
                           <span
                             className={`rounded-full px-3 py-1 text-xs font-bold ${roomStatusClass(
-                              room.status
+                              roomOccupancy.status as RoomStatus
                             )}`}
                           >
-                            {room.status}
+                            {roomOccupancy.status}
                           </span>
                         </div>
 
@@ -1098,7 +1109,7 @@ export default function RoomsPage() {
                       </p>
                     )}
 
-                    <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
                       <InfoCard label="Capacity" value={String(room.total_beds)} />
                       <InfoCard
                         label="Beds Added"
@@ -1108,6 +1119,8 @@ export default function RoomsPage() {
                         label="Occupied Beds"
                         value={String(occupied)}
                       />
+                      <InfoCard label="Blocked by Exclusive" value={String(roomOccupancy.blocked)} />
+                      <InfoCard label="Bookable Beds" value={String(roomOccupancy.available)} />
                       <InfoCard
                         label="Monthly Rent"
                         value={money(room.monthly_rent)}
@@ -1131,6 +1144,7 @@ export default function RoomsPage() {
                               bed={bed}
                               canDelete={
                                 bed.status !== BED_STATUS.OCCUPIED &&
+                                !bed.blockedByExclusive &&
                                 !referencedBedIds.has(bed.id)
                               }
                               onDelete={() => void deleteBed(bed)}
@@ -1170,6 +1184,7 @@ export default function RoomsPage() {
                                 bed={bed}
                                 canDelete={
                                   bed.status !== BED_STATUS.OCCUPIED &&
+                                  !bed.blockedByExclusive &&
                                   !referencedBedIds.has(bed.id)
                                 }
                                 onDelete={() => void deleteBed(bed)}
@@ -1201,12 +1216,14 @@ function BedCard({
 }) {
   const occupant = bed.occupant;
   const isOccupied = bed.status === "Occupied" || Boolean(occupant);
+  const blockedByExclusive = Boolean(bed.blockedByExclusive) && !occupant;
 
   return (
     <div
       className={`rounded-2xl border p-4 transition ${
         isOccupied
           ? "border-blue-200 bg-blue-50/40"
+          : blockedByExclusive ? "border-amber-200 bg-amber-50/50"
           : "border-slate-200 bg-slate-50"
       }`}
     >
@@ -1216,10 +1233,10 @@ function BedCard({
         </p>
         <span
           className={`rounded-full px-3 py-1 text-xs font-bold ${bedStatusClass(
-            bed.status,
+            blockedByExclusive ? "Blocked by Exclusive" : bed.status,
           )}`}
         >
-          {bed.status}
+          {blockedByExclusive ? "Blocked (Exclusive)" : bed.status}
         </span>
       </div>
 
@@ -1260,6 +1277,10 @@ function BedCard({
             )}
           </div>
         </div>
+      ) : blockedByExclusive ? (
+        <p className="mt-3 text-xs font-semibold text-amber-800">
+          Blocked by Whole-Room Allocation · not bookable
+        </p>
       ) : (
         <p className="mt-3 text-xs font-medium text-emerald-700">
           ✓ Vacant · Available for Admission

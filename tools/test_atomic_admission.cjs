@@ -12,13 +12,13 @@ async function testForm() {
   const start=source.indexOf('  async function saveAdmission(');
   const end=source.indexOf('\n  return (',start);
   const handler=source.slice(start,end);
-  for(const scenario of ['ok','rpc-failure','login-failure','notification-failure','refresh-failure']) {
+  for(const scenario of ['ok','whole-room','rpc-failure','login-failure','notification-failure','refresh-failure']) {
     const calls=[];let message='',error='';
     const setMessage=value=>{message=typeof value==='function'?value(message):value;};
     const noop=()=>{};
     const context={exports:{},residentId:'resident',roomId:'room',bedId:'bed',admissionDate:'2026-10-01',monthlyRent:'17000',securityDeposit:'0',specialClauses:' Terms ',communicationChannels:['email'],
-      setSaving:noop,setMessage,setError:value=>{error=value;},setResidentId:noop,setRoomId:noop,setBedId:noop,setAdmissionDate:noop,setMonthlyRent:noop,setSecurityDeposit:noop,setSpecialClauses:noop,
-      supabase:{rpc:async(name,args)=>{calls.push('rpc');assert.equal(name,'create_admission_package');assert.equal(args.p_security_deposit,0);assert.equal(args.p_special_clauses,'Terms');return scenario==='rpc-failure'?{error:{message:'injected'}}:{data:{admission_id:'a',rent_bill_id:'rent',contract_id:'c',deposit_bill_id:null}};}},
+      setSaving:noop,setMessage,setError:value=>{error=value;},setResidentId:noop,setRoomId:noop,setBedId:noop,setAllocationMode:noop,setAdmissionDate:noop,setMonthlyRent:noop,setSecurityDeposit:noop,setSpecialClauses:noop,
+      allocationMode:scenario==='whole-room'?'whole_room':'single_bed',supabase:{rpc:async(name,args)=>{calls.push('rpc');assert.equal(name,'create_admission_package');assert.equal(args.p_security_deposit,0);assert.equal(args.p_special_clauses,'Terms');assert.equal(args.p_allocation_mode,scenario==='whole-room'?'whole_room':'single_bed');return scenario==='rpc-failure'?{error:{message:'injected'}}:{data:{admission_id:'a',rent_bill_id:'rent',contract_id:'c',deposit_bill_id:null}};}},
       getSupabaseErrorMessage:e=>e.message,
       ensureResidentLogin:async()=>{calls.push('login');if(scenario==='login-failure')throw Error('injected');return {created:false,email:'local@example.invalid'};},
       requestEventNotification:async event=>{calls.push(event);return {warning:scenario==='notification-failure'};},
@@ -124,13 +124,13 @@ async function testForm() {
     }
     const conflict=await fixture();const other=await fixture();
     await db.query("insert into admissions(resident_id,room_id,bed_id,admission_date,status) values($1,$2,$3,'2026-09-01','Active')",[other.r,conflict.room,conflict.bed]);
-    await rejectUnchanged(conflict,{},/bed already belongs/);
+    await rejectUnchanged(conflict,{},/bed already belongs|no longer vacant/);
     for(const overrides of [{rent:0},{rent:-1},{deposit:-1},{rent:'NaN'},{rent:'Infinity'},{rent:'17000.001'},{date:'infinity'},{deposit:null}])await rejectUnchanged(await fixture(),overrides);
     const archived=await fixture();await db.query("update residents set status='Archived' where id=$1",[archived.r]);await rejectUnchanged(archived,{},/resident/);
     const maintenance=await fixture();await db.query("update rooms set status='Maintenance' where id=$1",[maintenance.room]);await rejectUnchanged(maintenance,{},/room/);
     const mismatch=await fixture();mismatch.room=(await fixture()).room;await rejectUnchanged(mismatch,{},/room/);
     for(const email of ['outsider@local.invalid','inactive@local.invalid','admissions-only@local.invalid','reception@local.invalid'])await rejectUnchanged(await fixture(),{},/permissions/,email);
-    for(const role of ['anon','service_role'])assert.equal((await one("select has_function_privilege($1,'public.create_admission_package(uuid,uuid,uuid,date,numeric,numeric,text)','EXECUTE') as allowed",[role])).allowed,false);
+    for(const role of ['anon','service_role'])assert.equal((await one("select has_function_privilege($1,'public.create_admission_package(uuid,uuid,uuid,date,numeric,numeric,text,text)','EXECUTE') as allowed",[role])).allowed,false);
 
     await db.exec('update contract_templates set is_active=false');await rejectUnchanged(await fixture(),{},/Exactly one/);
     await db.exec("update contract_templates set is_active=true,content=' '");await rejectUnchanged(await fixture(),{},/no terms/);

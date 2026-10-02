@@ -69,6 +69,7 @@ type Admission = {
   resident_id: string;
   room_id: string | null;
   bed_id: string | null;
+  allocation_mode?: "single_bed" | "whole_room" | null;
   admission_date: string;
   expected_leaving_date: string | null;
   actual_leaving_date?: string | null;
@@ -96,6 +97,7 @@ type AdmissionForm = {
   resident_id: string;
   room_id: string;
   bed_id: string;
+  allocation_mode: "single_bed" | "whole_room";
   admission_date: string;
   expected_leaving_date: string;
   monthly_rent: string;
@@ -110,6 +112,7 @@ const emptyForm: AdmissionForm = {
   resident_id: "",
   room_id: "",
   bed_id: "",
+  allocation_mode: "single_bed",
   admission_date: "",
   expected_leaving_date: "",
   monthly_rent: "",
@@ -252,6 +255,7 @@ export default function AdmissionsPage() {
     const currentEditingBedId = editingId
       ? admissions.find((admission) => admission.id === editingId)?.bed_id ?? null
       : null;
+    const otherExclusive = admissions.some(admission => admission.id !== editingId && admission.room_id === form.room_id && admission.allocation_mode === "whole_room");
 
     return beds
       .filter((bed) => bed.room_id === form.room_id)
@@ -269,7 +273,8 @@ export default function AdmissionsPage() {
           : null;
         const isAllocatable =
           isCurrentBed ||
-          (isAllocatableBedStatus(bed.status) && !otherAdmission);
+          (isAllocatableBedStatus(bed.status) && !otherAdmission && !otherExclusive &&
+            (form.allocation_mode !== "whole_room" || !admissions.some(admission => admission.id !== editingId && admission.room_id === form.room_id)));
 
         return {
           ...bed,
@@ -355,6 +360,7 @@ export default function AdmissionsPage() {
       resident_id: admission.resident_id,
       room_id: admission.room_id ?? "",
       bed_id: admission.bed_id ?? "",
+      allocation_mode: admission.allocation_mode === "whole_room" ? "whole_room" : "single_bed",
       admission_date: admission.admission_date,
       expected_leaving_date: admission.expected_leaving_date ?? "",
       monthly_rent: String(admission.monthly_rent ?? 0),
@@ -531,6 +537,7 @@ export default function AdmissionsPage() {
       resident_id: residentId,
       room_id: form.room_id || null,
       bed_id: form.bed_id || null,
+      allocation_mode: form.allocation_mode,
       admission_date: form.admission_date,
       expected_leaving_date: form.expected_leaving_date || null,
       monthly_rent: Number(form.monthly_rent) || 0,
@@ -1158,19 +1165,25 @@ export default function AdmissionsPage() {
                           isAdmissionRoomStatus(room.status) ||
                           room.id === form.room_id,
                       )
-                      .map((room) => (
-                        <option
-                          key={room.id}
-                          value={room.id}
-                          disabled={!isAdmissionRoomStatus(room.status)}
-                        >
-                          {room.room_number}
-                          {!isAdmissionRoomStatus(room.status)
-                            ? ` (${room.status ?? "Unavailable"})`
-                            : ""}
-                        </option>
-                      ))}
+                      .map((room) => {
+                        const otherCurrent = admissions.filter(item => item.id !== editingId && item.room_id === room.id);
+                        const modeConflict = form.allocation_mode === "whole_room"
+                          ? otherCurrent.length > 0
+                          : otherCurrent.some(item => item.allocation_mode === "whole_room");
+                        const disabled = !isAdmissionRoomStatus(room.status) || modeConflict;
+                        return <option key={room.id} value={room.id} disabled={disabled}>
+                          {room.room_number}{modeConflict ? " (Conflicts with current room allocation)" : !isAdmissionRoomStatus(room.status) ? ` (${room.status ?? "Unavailable"})` : ""}
+                        </option>;
+                      })}
                   </select>
+                </Field>
+
+                <Field label="Allocation Type *">
+                  <select value={form.allocation_mode} onChange={event => updateField("allocation_mode", event.target.value as AdmissionForm["allocation_mode"])} className={inputClass} disabled={saving}>
+                    <option value="single_bed">Single Bed</option>
+                    <option value="whole_room">Whole Room (Exclusive)</option>
+                  </select>
+                  {form.allocation_mode === "whole_room" && <span className="mt-2 block text-xs text-slate-600">Books the entire room while this admission is Pending or Active.</span>}
                 </Field>
 
                 <Field label="Bed *">
@@ -1197,7 +1210,7 @@ export default function AdmissionsPage() {
                       }
                       return (
                         <option key={bed.id} value={bed.id} disabled>
-                          🔴 {normalizeBedLabel(bed.bed_number)} — Occupied {bed.occupantName ? `by ${bed.occupantName}` : `(${bed.status})`} (Unavailable)
+                            🔴 {normalizeBedLabel(bed.bed_number)} — {bed.occupantName ? `Occupied by ${bed.occupantName}` : admissions.some(item => item.room_id === form.room_id && item.allocation_mode === "whole_room") ? "Blocked by Whole-Room Allocation" : `${bed.status} (Unavailable)`}
                         </option>
                       );
                     })}
@@ -1495,7 +1508,7 @@ const rent = getAdmissionRent(admission, depositBills, depositPayments);
 <td className="px-5 py-4 text-sm text-slate-700">
   <p>Room: {room?.room_number || "Not allocated"}</p>
   <p className="mt-1 text-xs text-slate-500">
-    Bed: {bed ? normalizeBedLabel(bed.bed_number) : "Not allocated"}
+    {admission.allocation_mode === "whole_room" ? "Whole Room (Exclusive)" : "Single Bed"} · {bed ? normalizeBedLabel(bed.bed_number) : "Not allocated"}
   </p>
 </td>
 

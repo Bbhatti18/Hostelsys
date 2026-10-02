@@ -11,6 +11,7 @@ import { REPORT_COLUMNS, reportDate, paymentCollectionBreakdown } from "@/lib/re
 import { normalizeBedLabel } from "@/lib/bedLabels";
 import { deriveBillStatus, roundMoney } from "@/lib/financials";
 import { BED_STATUS, isVacantBedStatus } from "@/lib/statuses";
+import { buildRoomOccupancy } from "@/lib/roomOccupancy";
 import { supabase } from "@/lib/supabase";
 import { getSupabaseErrorMessage } from "@/lib/supabaseErrors";
 
@@ -244,6 +245,11 @@ export default function ReportsModule() {
       return rooms.flatMap((room) => {
         const roomId = text(room.id);
         const roomBeds = beds.filter((bed) => text(bed.room_id) === roomId);
+        const roomOccupancy = buildRoomOccupancy(
+          room as { id: string; status: string | null },
+          roomBeds as Array<{ id: string; room_id: string; status: string | null }>,
+          admissions as Array<{ id: string; room_id: string | null; bed_id: string | null; resident_id: string; status: string | null; allocation_mode?: string | null }>,
+        );
         if (!roomBeds.length) {
           return [{
             id: "room-" + roomId,
@@ -264,6 +270,12 @@ export default function ReportsModule() {
         }
 
         return roomBeds.map((bed) => {
+          const projectedBed = roomOccupancy.beds.find(item => item.id === text(bed.id));
+          const derivedStatus = projectedBed?.blockedByExclusive
+            ? "Blocked by Whole-Room Allocation"
+            : projectedBed?.occupied ? "Occupied"
+            : projectedBed?.assignable ? "Vacant"
+            : projectedBed?.displayStatus || first(bed, ["status"]);
           const bedAdmissions = admissions
             .filter((admission) => text(admission.bed_id) === text(bed.id))
             .sort(latestFirst);
@@ -278,7 +290,7 @@ export default function ReportsModule() {
           return {
             id: text(bed.id),
             date: "",
-            status: first(bed, ["status"]),
+            status: derivedStatus,
             residentIds: Array.from(
               new Set(
                 bedAdmissions
@@ -290,7 +302,7 @@ export default function ReportsModule() {
             cells: {
               Room: roomName(roomId),
               Bed: normalizeBedLabel(first(bed, ["bed_number"], "Bed")),
-              "Bed Status": first(bed, ["status"]),
+              "Bed Status": derivedStatus,
               "Current Resident": currentAdmission
                 ? residentName(text(currentAdmission.resident_id))
                 : "—",
@@ -661,6 +673,10 @@ export default function ReportsModule() {
           value: filtered.filter((record) =>
             isVacantBedStatus(record.cells["Bed Status"]),
           ).length,
+        },
+        {
+          label: "Blocked by Exclusive",
+          value: filtered.filter(record => record.cells["Bed Status"] === "Blocked by Whole-Room Allocation").length,
         },
       ];
     }
