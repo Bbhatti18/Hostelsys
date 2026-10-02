@@ -246,6 +246,8 @@ export default function ResidentsPage() {
   });
   const [photoFileName, setPhotoFileName] = useState("");
   const [idCardFileName, setIdCardFileName] = useState("");
+  const [guardianFrontFile, setGuardianFrontFile] = useState<File | null>(null);
+  const [guardianFrontFileName, setGuardianFrontFileName] = useState("");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -515,6 +517,8 @@ export default function ResidentsPage() {
     });
     setPhotoFileName("");
     setIdCardFileName("");
+    setGuardianFrontFile(null);
+    setGuardianFrontFileName("");
     setMessage("");
     setError("");
     setShowForm(true);
@@ -557,6 +561,8 @@ export default function ResidentsPage() {
     });
     setPhotoFileName("");
     setIdCardFileName("");
+    setGuardianFrontFile(null);
+    setGuardianFrontFileName("");
     setMessage("");
     setError("");
     setShowForm(true);
@@ -566,7 +572,50 @@ export default function ResidentsPage() {
   function closeForm() {
     setEditingId(null);
     setForm(emptyForm);
+    setGuardianFrontFile(null);
+    setGuardianFrontFileName("");
     setShowForm(false);
+  }
+
+  async function uploadGuardianFrontDocument(residentId: string, file: File) {
+    const { data } = await supabase.auth.getSession();
+    if (!data.session) throw new Error("Please sign in again before uploading the Guardian Front document.");
+    const body = new FormData();
+    body.set("slot", "guardian_front");
+    body.set("file", file);
+    const response = await fetch(`/api/resident-portal/profile/documents?residentId=${encodeURIComponent(residentId)}`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${data.session.access_token}` },
+      body,
+    });
+    const result = await response.json().catch(() => null) as { error?: string } | null;
+    if (!response.ok) throw new Error(result?.error || "The Guardian Front document could not be uploaded.");
+  }
+
+  async function handleGuardianFrontSelection(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const invalid = profileDocumentError("guardian_front", file.type, file.size);
+    if (invalid) {
+      setGuardianFrontFile(null);
+      setGuardianFrontFileName("");
+      setError(invalid);
+      return;
+    }
+    try {
+      const prepared = await compressProfileImage(file, "guardian_front");
+      const outputError = profileDocumentError("guardian_front", prepared.type, prepared.size);
+      if (outputError) throw new Error(outputError);
+      setGuardianFrontFile(prepared);
+      setGuardianFrontFileName(file.name);
+      setError("");
+    } catch (selectionError) {
+      setGuardianFrontFile(null);
+      setGuardianFrontFileName("");
+      setError(selectionError instanceof Error ? selectionError.message : "Unable to prepare the Guardian Front document.");
+    }
   }
 
   async function saveResident(event: FormEvent<HTMLFormElement>) {
@@ -726,6 +775,20 @@ export default function ResidentsPage() {
         setMessage(successMessage);
         await refresh();
         setError("Resident saved, but additional contacts were not saved. Retry Save Resident; do not create another resident. " + contactResult.error.message);
+        setSaving(false);
+        return;
+      }
+    }
+    if (savedResidentId && guardianFrontFile) {
+      try {
+        await uploadGuardianFrontDocument(String(savedResidentId), guardianFrontFile);
+        setGuardianFrontFile(null);
+        setGuardianFrontFileName("");
+      } catch (uploadError) {
+        if (!editingId) setEditingId(String(savedResidentId));
+        await refresh();
+        setMessage(successMessage);
+        setError(`Resident was saved, but the Guardian ${form.guardian_identity_type === "Passport" ? "Passport Identity Page" : "CNIC Front"} was NOT uploaded. The selected file is still pending; click Update Resident to retry. ${uploadError instanceof Error ? uploadError.message : "Upload failed."}`);
         setSaving(false);
         return;
       }
@@ -986,20 +1049,25 @@ export default function ResidentsPage() {
                   <Field label="Resident Identity Document Type"><select value={form.resident_identity_type} onChange={e => updateField("resident_identity_type", e.target.value)} className={inputClass}><option value="">Not specified (CNIC requirements)</option><option>CNIC</option><option>Passport</option></select></Field>
                   <Field label="Guardian Identity Document Type"><select value={form.guardian_identity_type} onChange={e => updateField("guardian_identity_type", e.target.value)} className={inputClass}><option value="">Not specified (CNIC requirements)</option><option>CNIC</option><option>Passport</option></select></Field>
                 </div>
-                {editingId ? <ProfileDocuments key={editingId} onBusyChange={setDocumentsUploading} residentId={editingId} residentType={form.resident_identity_type || "CNIC"} guardianType={form.guardian_identity_type || "CNIC"} slots={["resident_back", "guardian_front", "guardian_back"]} /> : <p className="text-sm text-slate-500">After saving the resident, use Edit to upload additional private identity documents.</p>}
+                <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
+                  <p>Resident: {form.resident_identity_type === "Passport" ? "Passport identity page required; no back required." : "CNIC front and back required."}</p>
+                  <p>Guardian: {form.guardian_identity_type === "Passport" ? "Passport identity page required; no back required." : "CNIC front and back required."}</p>
+                  <p>Upload backs and guardian documents after saving the resident.</p>
+                </div>
+                {editingId ? <ProfileDocuments key={editingId} onBusyChange={setDocumentsUploading} residentId={editingId} residentType={form.resident_identity_type || "CNIC"} guardianType={form.guardian_identity_type || "CNIC"} slots={["resident_front", "resident_back", "guardian_front", "guardian_back"]} /> : <p className="text-sm text-slate-500">After saving the resident, use Edit to upload additional private identity documents.</p>}
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                <Field label="Photo Upload">
+                <Field label="Resident Photo">
                   <div className="space-y-2">
                     <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoUpload} className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100" />
                     {photoFileName ? <p className="text-xs text-slate-500">Selected: {photoFileName}</p> : null}
                   </div>
                 </Field>
-                <Field label="ID Card Upload">
+                {!editingId && <Field label={form.resident_identity_type === "Passport" ? "Resident Passport Identity Page" : "Resident CNIC Front"}>
                   <div className="space-y-2">
                     <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handleIdCardUpload} className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100" />
                     {idCardFileName ? <p className="text-xs text-slate-500">Selected: {idCardFileName}</p> : null}
                   </div>
-                </Field>
+                </Field>}
                 </div>
               </section>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

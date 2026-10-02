@@ -4,6 +4,17 @@ export const documentLabels: Record<DocumentSlot, string> = {
   photo: "Resident Profile Photo", resident_front: "Resident CNIC Front / Passport Identity Page",
   resident_back: "Resident CNIC Back", guardian_front: "Guardian CNIC Front / Passport Identity Page", guardian_back: "Guardian CNIC Back",
 };
+export function documentLabel(slot: DocumentSlot, residentType = "CNIC", guardianType = "CNIC") {
+  if (slot === "resident_front") return residentType === "Passport" ? "Resident Passport Identity Page" : "Resident CNIC Front";
+  if (slot === "guardian_front") return guardianType === "Passport" ? "Guardian Passport Identity Page" : "Guardian CNIC Front";
+  return documentLabels[slot];
+}
+export function documentSlotsForIdentityType(slots: readonly DocumentSlot[], residentType = "CNIC", guardianType = "CNIC") {
+  return slots.filter(slot =>
+    !(slot === "resident_back" && residentType === "Passport") &&
+    !(slot === "guardian_back" && guardianType === "Passport"),
+  );
+}
 export const MAX_PROFILE_DOCUMENT_BYTES = 4 * 1024 * 1024;
 export function profileDocumentError(slot: string, type: string, size: number, bytes?: Uint8Array) {
   if (!documentSlots.includes(slot as DocumentSlot)) return "Unknown document type.";

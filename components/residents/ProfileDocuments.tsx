@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { documentLabels, documentSlots, profileDocumentError, type DocumentSlot } from "@/lib/profileDocuments";
+import { documentLabel, documentSlots, documentSlotsForIdentityType, profileDocumentError, type DocumentSlot } from "@/lib/profileDocuments";
 import { compressProfileImage } from "@/lib/compressProfileImage";
 
 type DocumentEntry = { slot: DocumentSlot; recorded: boolean; needsReview: boolean; editable: boolean; url: string | null };
@@ -49,21 +49,25 @@ export default function ProfileDocuments({ residentId, residentType = "CNIC", gu
     try {
       const entry = (await load()).find(doc => doc.slot === slot);
       if (!entry?.url) throw new Error("This existing document needs staff review; it has not been changed.");
-      setPreview({ url: entry.url, label: documentLabels[slot] });
+      setPreview({ url: entry.url, label: documentLabel(slot, residentType, guardianType) });
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to view document."); }
   }
   return <div className="space-y-4">
-    <p className="text-sm text-slate-600">Private uploads, up to 4 MB each. Photos: JPEG, PNG or WebP. Identity documents also accept PDF. Passport identity pages do not require a back image. Uploads are saved immediately; final submission locks resident changes.</p>
+    <div className="space-y-1 text-sm text-slate-600">
+      <p>Resident: {residentType === "Passport" ? "Passport identity page only; no back required." : "CNIC front + back required."}</p>
+      <p>Guardian: {guardianType === "Passport" ? "Passport identity page only; no back required." : "CNIC front + back required."}</p>
+      <p>Private uploads, up to 4 MB each. Photos: JPEG, PNG or WebP. Identity documents also accept PDF. Uploads are saved immediately; final submission locks resident changes.</p>
+    </div>
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
     <div className="grid gap-4 md:grid-cols-2">
-      {slots.map(slot => {
+      {documentSlotsForIdentityType(slots, residentType, guardianType).map(slot => {
         const entry = documents.find(doc => doc.slot === slot);
-        const optional = (slot === "resident_back" && residentType === "Passport") || (slot === "guardian_back" && guardianType === "Passport");
+        const label = documentLabel(slot, residentType, guardianType);
         return <div key={slot} className="space-y-2 rounded-xl border p-3">
-          <p className="font-medium">{documentLabels[slot]} {optional ? "(Optional for Passport)" : "(Required)"}</p>
+          <p className="font-medium">{label} (Required)</p>
           <p className="text-sm text-slate-500">{entry?.needsReview ? "Recorded — staff review needed" : entry?.recorded ? "Recorded" : "Not uploaded"}</p>
           {entry?.recorded && <button type="button" className="mr-3 text-sm font-semibold text-indigo-700" onClick={() => void view(slot)}>View document</button>}
-          {!readOnly && entry?.editable && <label className="block text-sm">{entry.recorded ? "Replace upload" : "Upload"}<input aria-label={documentLabels[slot]} type="file" disabled={busy} accept={slot === "photo" ? "image/jpeg,image/png,image/webp" : "image/jpeg,image/png,image/webp,application/pdf"} className="mt-2 block w-full text-sm" onChange={e => { void upload(slot, e.target.files?.[0]); e.target.value = ""; }} /></label>}
+          {!readOnly && entry?.editable && <label className="block text-sm">{entry.recorded ? "Replace upload" : "Upload"}<input aria-label={label} type="file" disabled={busy} accept={slot === "photo" ? "image/jpeg,image/png,image/webp" : "image/jpeg,image/png,image/webp,application/pdf"} className="mt-2 block w-full text-sm" onChange={e => { void upload(slot, e.target.files?.[0]); e.target.value = ""; }} /></label>}
         </div>;
       })}
     </div>

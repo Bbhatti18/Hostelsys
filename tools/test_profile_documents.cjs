@@ -122,6 +122,18 @@ await assert.rejects(upload(grandfather,'photo','existing@local.invalid'),/locke
 console.log('PASS staff correction after lock is audited; staff/legacy documents remain authoritative');
 
 const source=fs.readFileSync('app/residents/page.tsx','utf8');
+assert.match(source,/slots=\{\["resident_front", "resident_back", "guardian_front", "guardian_back"\]\}/);
+assert.match(source,/form\.resident_identity_type === "Passport" \? "Resident Passport Identity Page" : "Resident CNIC Front"/);
+assert.match(source,/<Field label="Resident Photo">/);
+assert.doesNotMatch(source,/ID Card Upload/);
+assert.match(source,/Resident: \{form\.resident_identity_type === "Passport" \?/);
+assert.match(source,/Guardian: \{form\.guardian_identity_type === "Passport" \?/);
+const sharedDocumentUi=fs.readFileSync('components/residents/ProfileDocuments.tsx','utf8');
+assert.match(sharedDocumentUi,/documentSlotsForIdentityType\(slots, residentType, guardianType\)/);
+assert.match(sharedDocumentUi,/Resident: \{residentType === "Passport" \?/);
+assert.match(sharedDocumentUi,/Guardian: \{guardianType === "Passport" \?/);
+const portalCompletion=fs.readFileSync('components/residents/ProfileCompletion.tsx','utf8');
+assert.match(portalCompletion,/<ProfileDocuments[\s\S]*residentType=\{data\.resident\.resident_identity_type/);
 const headings=['Personal Information','Guardian Information','Emergency Contacts','Address & Other Details','Documents / Photo'];
 const form=source.slice(source.indexOf('<form onSubmit={saveResident}'),source.indexOf('</form>',source.indexOf('<form onSubmit={saveResident}')));
 let previous=-1;for(const heading of headings){const position=form.indexOf('>'+heading+'</h3>');assert.ok(position>previous,heading);previous=position;}
@@ -130,6 +142,12 @@ assert.equal((form.match(/value=\{form\.guardian_phone\}/g)||[]).length,1);
 const pure={exports:{}};vm.runInNewContext('(function(exports){'+ts.transpileModule(fs.readFileSync('lib/profileDocuments.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText+'})',{})(pure.exports);
 const validation=pure.exports.profileDocumentError;
 const MAX_PROFILE_DOCUMENT_BYTES=pure.exports.MAX_PROFILE_DOCUMENT_BYTES;
+const {documentLabel,documentSlots,documentSlotsForIdentityType}=pure.exports;
+assert.equal(documentLabel('resident_front','CNIC'),'Resident CNIC Front');
+assert.equal(documentLabel('resident_front','Passport'),'Resident Passport Identity Page');
+assert.equal(documentLabel('guardian_front','CNIC','Passport'),'Guardian Passport Identity Page');
+assert.deepEqual(JSON.parse(JSON.stringify(documentSlotsForIdentityType(documentSlots,'CNIC','CNIC'))),['photo','resident_front','resident_back','guardian_front','guardian_back']);
+assert.deepEqual(JSON.parse(JSON.stringify(documentSlotsForIdentityType(documentSlots,'Passport','Passport'))),['photo','resident_front','guardian_front']);
 assert.equal(validation('photo','image/png',8,new Uint8Array([137,80,78,71,13,10,26,10])),null);
 assert.ok(validation('photo','application/pdf',5));assert.ok(validation('photo','image/svg+xml',10));assert.ok(validation('photo','image/png',5e6));assert.ok(validation('photo','image/png',8,new Uint8Array(8)));
 assert.equal(validation('guardian_front','application/pdf',5,new Uint8Array([37,80,68,70,45])),null);

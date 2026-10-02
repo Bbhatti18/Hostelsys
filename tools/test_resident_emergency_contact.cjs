@@ -12,7 +12,7 @@ const edit=source.slice(source.indexOf('  function openEditForm('),source.indexO
 let loaded;
 const noop=()=>{};
 const resident={id:'local',full_name:'Fixture',status:'Inactive',guardian_cnic:'GUARDIAN-ID',guardian_phone:'03123456789',emergency_contact:'03001234567',emergency_contact_name:'Contact',emergency_contact_relationship:'Aunt'};
-evaluate(edit+'\nopenEditForm(resident);',{resident,setContactsVersion:noop,setContactsLoading:noop,setExtraContacts:noop,setEditingId:noop,setForm:f=>loaded=f,setPhotoFileName:noop,setIdCardFileName:noop,setMessage:noop,setError:noop,setShowForm:noop,window:{scrollTo:noop}});
+evaluate(edit+'\nopenEditForm(resident);',{resident,setContactsVersion:noop,setContactsLoading:noop,setExtraContacts:noop,setEditingId:noop,setForm:f=>loaded=f,setPhotoFileName:noop,setIdCardFileName:noop,setGuardianFrontFile:noop,setGuardianFrontFileName:noop,setMessage:noop,setError:noop,setShowForm:noop,window:{scrollTo:noop}});
 assert.equal(loaded.emergency_contact_relationship,'Aunt');assert.equal(loaded.emergency_contact_name,'Contact');assert.equal(loaded.emergency_contact,resident.emergency_contact);
 assert.equal(loaded.guardian_cnic,resident.guardian_cnic);assert.equal(loaded.guardian_phone,resident.guardian_phone);
 const start=source.indexOf('    const payload = {',source.indexOf('async function saveResident'));
@@ -38,7 +38,7 @@ const saveHandler=source.slice(source.indexOf('  async function saveResident('),
 for(const editingId of [null,'local']) for(const fail of [false,true]) {
   let savedId=null,closed=false,error='',written=null;
   const contacts=[{contact_name:'Father',relationship:'Father',phone:'03000000000'},{contact_name:'Uncle',relationship:'Uncle',phone:'03111111111'}];
-  const context={exports:{},editingId,contactsLoading:false,documentsUploading:false,extraContacts:contacts,form:{...empty,full_name:'Fixture',phone:'03012345678',email:'local@example.invalid',cnic:'LOCAL-ID',guardian_cnic:'GUARDIAN-ID',guardian_phone:'03123456789'},residents:[],
+  const context={exports:{},editingId,contactsLoading:false,documentsUploading:false,guardianFrontFile:null,extraContacts:contacts,form:{...empty,full_name:'Fixture',phone:'03012345678',email:'local@example.invalid',cnic:'LOCAL-ID',guardian_cnic:'GUARDIAN-ID',guardian_phone:'03123456789'},residents:[],
     RESIDENT_STATUS:{INACTIVE:'Inactive'},retryContactsFor:{current:null},setSaving:noop,setMessage:noop,setError:value=>{error=value;},setEditingId:id=>{savedId=id;},closeForm:()=>{closed=true;},refresh:async()=>{error='';},
     normalizeEmail:v=>v.trim().toLowerCase(),normalizePhone:v=>v,normalizeIdentity:v=>v,generateResidentCode:()=> 'LOCAL',ensureResidentLogin:async()=>({created:false,email:'local@example.invalid'}),getSupabaseErrorMessage:e=>e.message,
     supabase:{from:()=>({select:()=>({order:async()=>({data:[],error:null})}),update:payload=>({eq:async()=>{written=payload;return {error:null};}}),insert:payload=>({select:()=>({single:async()=>{written=payload;return {data:{id:'created'},error:null};}})})}),rpc:async(name,args)=>{assert.equal(name,'save_resident_emergency_contacts');assert.equal(args.p_resident_id,editingId||'created');assert.equal(args.p_contacts.length,2);return {error:fail?{message:'Injected contact failure'}:null};}}
@@ -49,6 +49,22 @@ for(const editingId of [null,'local']) for(const fail of [false,true]) {
   if(fail){assert.equal(closed,false);assert.equal(savedId,editingId||'created');assert.match(error,/Resident saved, but additional contacts were not saved/);if(!editingId)assert.equal(context.retryContactsFor.current,'created');}
   else {assert.equal(closed,true);assert.equal(error,'');}
 }
+for(const failUpload of [false,true]) {
+  let uploadedFor=null,closed=false,error='',savedId=null;
+  const guardianFile={name:'guardian-front-compressed.jpg'};
+  const context={exports:{},editingId:null,contactsLoading:false,documentsUploading:false,guardianFrontFile:guardianFile,extraContacts:[],form:{...empty,full_name:'Fixture',phone:'03012345678',email:'local@example.invalid',cnic:'LOCAL-ID',guardian_cnic:'GUARDIAN-ID',guardian_phone:'03123456789'},residents:[],
+    RESIDENT_STATUS:{INACTIVE:'Inactive'},retryContactsFor:{current:null},setSaving:noop,setMessage:noop,setError:value=>{error=value;},setEditingId:id=>{savedId=id;},closeForm:()=>{closed=true;},refresh:async()=>{},setGuardianFrontFile:noop,setGuardianFrontFileName:noop,
+    uploadGuardianFrontDocument:async(id,file)=>{uploadedFor=id;assert.equal(file,guardianFile);if(failUpload)throw Error('Private upload unavailable');},
+    normalizeEmail:v=>v.trim().toLowerCase(),normalizePhone:v=>v,normalizeIdentity:v=>v,generateResidentCode:()=> 'LOCAL',ensureResidentLogin:async()=>({created:false,email:'local@example.invalid'}),getSupabaseErrorMessage:e=>e.message,
+    supabase:{from:()=>({select:()=>({order:async()=>({data:[],error:null})}),insert:payload=>({select:()=>({single:async()=>{return {data:{id:'created'},error:null};}})})}),rpc:async(name,args)=>{assert.equal(name,'save_resident_emergency_contacts');assert.equal(args.p_resident_id,'created');return {error:null};}}
+  };
+  evaluate(saveHandler+'\nexports.save=saveResident;',context);
+  await context.exports.save({preventDefault(){}});
+  assert.equal(uploadedFor,'created','Guardian document uses the ID returned by resident creation');
+  if(failUpload){assert.equal(closed,false);assert.equal(savedId,'created');assert.match(error,/Resident was saved, but the Guardian CNIC Front was NOT uploaded/);assert.match(error,/selected file is still pending/);}
+  else {assert.equal(closed,true);assert.equal(error,'');}
+}
 console.log('PASS actual staff Create/Edit handler saves contacts and guardian details; partial failure retains edit identity and retry message');
+console.log('PASS Guardian Front upload runs after resident creation, maps the new resident ID, and reports post-save failure without closing/recreating');
 console.log('PASS optional schema, existing row preserved, create/edit payloads, edit loading, legacy relationship preservation, profile fields');
 }finally{await db.close();}})().catch(e=>{console.error(e);process.exitCode=1;});
