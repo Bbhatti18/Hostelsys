@@ -12,13 +12,13 @@ async function testForm() {
   const start=source.indexOf('  async function saveAdmission(');
   const end=source.indexOf('\n  return (',start);
   const handler=source.slice(start,end);
-  for(const scenario of ['ok','whole-room','rpc-failure','login-failure','notification-failure','refresh-failure']) {
+  for(const scenario of ['ok','whole-room','single-bed-no-bed','rpc-failure','login-failure','notification-failure','refresh-failure']) {
     const calls=[];let message='',error='';
     const setMessage=value=>{message=typeof value==='function'?value(message):value;};
     const noop=()=>{};
-    const context={exports:{},residentId:'resident',roomId:'room',bedId:'bed',admissionDate:'2026-10-01',monthlyRent:'17000',securityDeposit:'0',specialClauses:' Terms ',communicationChannels:['email'],
+    const context={exports:{},residentId:'resident',roomId:'room',bedId:scenario==='whole-room'||scenario==='single-bed-no-bed'?'':'bed',admissionDate:'2026-10-01',monthlyRent:'17000',securityDeposit:'0',specialClauses:' Terms ',communicationChannels:['email'],
       setSaving:noop,setMessage,setError:value=>{error=value;},setResidentId:noop,setRoomId:noop,setBedId:noop,setAllocationMode:noop,setAdmissionDate:noop,setMonthlyRent:noop,setSecurityDeposit:noop,setSpecialClauses:noop,
-      allocationMode:scenario==='whole-room'?'whole_room':'single_bed',supabase:{rpc:async(name,args)=>{calls.push('rpc');assert.equal(name,'create_admission_package');assert.equal(args.p_security_deposit,0);assert.equal(args.p_special_clauses,'Terms');assert.equal(args.p_allocation_mode,scenario==='whole-room'?'whole_room':'single_bed');return scenario==='rpc-failure'?{error:{message:'injected'}}:{data:{admission_id:'a',rent_bill_id:'rent',contract_id:'c',deposit_bill_id:null}};}},
+      allocationMode:scenario==='whole-room'?'whole_room':'single_bed',supabase:{rpc:async(name,args)=>{calls.push('rpc');assert.equal(name,'create_admission_package');assert.equal(args.p_security_deposit,0);assert.equal(args.p_special_clauses,'Terms');assert.equal(args.p_allocation_mode,scenario==='whole-room'?'whole_room':'single_bed');assert.equal(args.p_bed_id,scenario==='whole-room'?null:'bed');return scenario==='rpc-failure'?{error:{message:'injected'}}:{data:{admission_id:'a',rent_bill_id:'rent',contract_id:'c',deposit_bill_id:null}};}},
       getSupabaseErrorMessage:e=>e.message,
       ensureResidentLogin:async()=>{calls.push('login');if(scenario==='login-failure')throw Error('injected');return {created:false,email:'local@example.invalid'};},
       requestEventNotification:async event=>{calls.push(event);return {warning:scenario==='notification-failure'};},
@@ -29,9 +29,9 @@ async function testForm() {
       compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020},
     }).outputText,context);
     await context.exports.save({preventDefault(){}});
-    assert.equal(calls[0],'rpc');
-    if(scenario==='rpc-failure') {assert.deepEqual(calls,['rpc']);assert.ok(error);}
-    else {assert.equal(error,'');assert.match(message,/saved/);assert.equal(calls.filter(c=>c==='rpc').length,1);}
+    if(scenario==='single-bed-no-bed') {assert.deepEqual(calls,[]);assert.match(error,/bed.*required/i);}
+    else if(scenario==='rpc-failure') {assert.deepEqual(calls,['rpc']);assert.ok(error);}
+    else {assert.equal(calls[0],'rpc');assert.equal(error,'');assert.match(message,/saved/);assert.equal(calls.filter(c=>c==='rpc').length,1);}
     if(scenario==='login-failure')assert.ok(!calls.includes('resident_login_details_sent'));
     if(scenario==='notification-failure')assert.match(message,/Notification failed/);
     if(scenario==='refresh-failure')assert.match(message,/do not create this admission again/);

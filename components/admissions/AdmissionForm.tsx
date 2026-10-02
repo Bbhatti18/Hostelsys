@@ -21,6 +21,7 @@ import {
   normalizeBedLabel,
 } from "@/lib/bedLabels";
 import {
+  isOperationalBedStatus,
   RESIDENT_STATUS,
 } from "@/lib/statuses";
 
@@ -410,8 +411,8 @@ export default function AdmissionForm({
     setMessage("");
     setError("");
 
-    if (!residentId || !roomId || !bedId || !admissionDate || Number(monthlyRent) <= 0) {
-      setError("Resident, room, bed, admission date, and monthly rent are required.");
+    if (!residentId || !roomId || (allocationMode === "single_bed" && !bedId) || !admissionDate || Number(monthlyRent) <= 0) {
+      setError(`Resident, room, ${allocationMode === "single_bed" ? "bed, " : ""}admission date, and monthly rent are required.`);
       setSaving(false);
       return;
     }
@@ -431,7 +432,7 @@ export default function AdmissionForm({
       const { data: admissionPackage, error: packageError } = await supabase.rpc("create_admission_package", {
         p_resident_id: residentId,
         p_room_id: roomId,
-        p_bed_id: bedId,
+        p_bed_id: allocationMode === "whole_room" ? null : bedId,
         p_admission_date: admissionDate,
         p_monthly_rent: Number(monthlyRent),
         p_security_deposit: Number(securityDeposit || 0),
@@ -495,7 +496,7 @@ export default function AdmissionForm({
           <div>
             <h2 className="text-xl font-bold text-slate-900">New Admission</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Select a resident and manually allocate a vacant bed.
+              Choose an allocation type and eligible room for the resident.
             </p>
           </div>
           <button
@@ -599,43 +600,31 @@ export default function AdmissionForm({
               </select>
             </label>
 
-            <label>
-              <span className="mb-2 block text-sm font-semibold text-slate-700">
-                Bed *
-              </span>
-              <select
-                required
-                value={bedId}
-                onChange={(event) => setBedId(event.target.value)}
-                className={inputClass}
-                disabled={!roomId || loading || saving}
-              >
-                <option value="">
-                  {!roomId
-                    ? "Select a room first"
-                    : availableBeds.length === 0
-                    ? "No vacant beds in this room"
-                    : "Select available bed"}
-                </option>
-                {roomBedsList.map((bed) => {
-                  const occupant = occupants.get(bed.id);
-                  const isAvailable = availableBeds.some(item => item.id === bed.id);
-                  if (isAvailable) {
-                    return (
-                      <option key={bed.id} value={bed.id}>
-                        🟢 {normalizeBedLabel(bed.bed_number)} — Available ({bed.status})
-                      </option>
-                    );
-                  }
-                  return (
-                    <option key={bed.id} value={bed.id} disabled>
-                      🔴 {normalizeBedLabel(bed.bed_number)} — {occupant ? `Occupied by ${occupant.resident_name}` : currentAdmissions.some(admission => admission.room_id === roomId && admission.allocation_mode === "whole_room") ? "Blocked by Whole-Room Allocation" : `${bed.status} (Unavailable)`}
-                                      {availableBeds.length} Available / {roomBedStats.get(roomId)?.total ?? 0} Active Beds
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
+            {allocationMode === "single_bed" ? (
+              <label>
+                <span className="mb-2 block text-sm font-semibold text-slate-700">Bed *</span>
+                <select required value={bedId} onChange={(event) => setBedId(event.target.value)} className={inputClass} disabled={!roomId || loading || saving}>
+                  <option value="">{!roomId ? "Select a room first" : availableBeds.length === 0 ? "No vacant beds in this room" : "Select available bed"}</option>
+                  {roomBedsList.map((bed) => {
+                    const occupant = occupants.get(bed.id);
+                    const isAvailable = availableBeds.some(item => item.id === bed.id);
+                    return isAvailable
+                      ? <option key={bed.id} value={bed.id}>🟢 {normalizeBedLabel(bed.bed_number)} — Available ({bed.status})</option>
+                      : <option key={bed.id} value={bed.id} disabled>🔴 {normalizeBedLabel(bed.bed_number)} — {occupant ? `Occupied by ${occupant.resident_name}` : currentAdmissions.some(admission => admission.room_id === roomId && admission.allocation_mode === "whole_room") ? "Blocked by Whole-Room Allocation" : `${bed.status} (Unavailable)`}</option>;
+                  })}
+                </select>
+              </label>
+            ) : (
+              <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 md:col-span-2" aria-live="polite">
+                <h3 className="font-semibold">Whole Room Reservation</h3>
+                {!roomId ? <p className="mt-1">Select an eligible room to preview the beds reserved.</p> : <>
+                  <p className="mt-1">{roomBedStats.get(roomId)?.total ?? 0} active beds will be reserved exclusively for this resident.</p>
+                  <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                    {roomBedsList.filter(bed => isOperationalBedStatus(bed.status)).map(bed => <li key={bed.id}>{normalizeBedLabel(bed.bed_number)} — Will be reserved</li>)}
+                  </ul>
+                </>}
+              </section>
+            )}
 
             <label>
               <span className="mb-2 block text-sm font-semibold text-slate-700">
@@ -663,7 +652,7 @@ export default function AdmissionForm({
             </label>
           </div>
 
-              {roomId && (
+              {roomId && allocationMode === "single_bed" && (
             <div
               className={`rounded-2xl border p-4 text-sm ${
                 availableBeds.length === 0

@@ -43,8 +43,8 @@ function loadPure(name) {
     async function fixture(roomStatus = 'Available', bedStatuses = ['Vacant', 'Vacant', 'Vacant']) {
       const roomId = randomUUID();
       const residentIds = [randomUUID(), randomUUID(), randomUUID()];
-      const beds = [randomUUID(), randomUUID(), randomUUID()];
-      await db.query('insert into rooms(id,room_number,status,total_beds) values($1,$2,$3,3)', [roomId, roomId, roomStatus]);
+      const beds = bedStatuses.map(() => randomUUID());
+      await db.query('insert into rooms(id,room_number,status,total_beds) values($1,$2,$3,$4)', [roomId, roomId, roomStatus, bedStatuses.length]);
       for (let i = 0; i < beds.length; i++) {
         await db.query('insert into beds(id,room_id,bed_number,status) values($1,$2,$3,$4)', [beds[i], roomId, String.fromCharCode(65 + i), bedStatuses[i]]);
       }
@@ -77,6 +77,7 @@ function loadPure(name) {
     const countAdmissions = async roomId => Number((await one("select count(*) as count from admissions where room_id=$1 and status in ('Pending','Active')", [roomId])).count);
 
     const shared = await fixture();
+    await assert.rejects(create(shared, shared.residentIds[0], null, 'single_bed'), /Select a bed for Single Bed allocation/);
     const single = await create(shared, shared.residentIds[0], shared.beds[0], 'single_bed', true);
     assert.equal((await one('select allocation_mode from admissions where id=$1', [single.admission_id])).allocation_mode, 'single_bed');
     assert.equal((await one('select status from beds where id=$1', [shared.beds[1]])).status, 'Vacant');
@@ -87,8 +88,10 @@ function loadPure(name) {
     await assert.rejects(create(shared, shared.residentIds[1], shared.beds[1], 'whole_room'), /no other current admission/);
 
     const privateRoom = await fixture();
-    const exclusive = await create(privateRoom, privateRoom.residentIds[0], privateRoom.beds[0], 'whole_room');
+    const exclusive = await create(privateRoom, privateRoom.residentIds[0], null, 'whole_room');
     assert.equal((await one('select allocation_mode from admissions where id=$1', [exclusive.admission_id])).allocation_mode, 'whole_room');
+    assert.equal(exclusive.primary_bed_id, privateRoom.beds[0], 'Whole Room chooses the first bed in stable bed-number order without a caller-selected bed');
+    assert.equal((await one('select bed_id from admissions where id=$1', [exclusive.admission_id])).bed_id, privateRoom.beds[0]);
     assert.equal(Number((await one('select total_beds from rooms where id=$1', [privateRoom.roomId])).total_beds), 3, 'Exclusive allocation does not alter configured capacity');
     assert.equal(await countAdmissions(privateRoom.roomId), 1, 'Exclusive booking creates one resident/admission only');
     assert.equal(Number((await one("select count(*) as count from bills where admission_id=$1 and bill_type='Rent' and total_amount=17000", [exclusive.admission_id])).count), 1);
@@ -112,11 +115,28 @@ function loadPure(name) {
     await assert.rejects(create(inactive, inactive.residentIds[0], inactive.beds[0]), /no longer vacant in this room/);
     const maintenance = await fixture('Maintenance');
     await assert.rejects(create(maintenance, maintenance.residentIds[0], maintenance.beds[0]), /not operational/);
+    const noEligibleBeds = await fixture('Available', ['Inactive', 'Occupied']);
+    await assert.rejects(create(noEligibleBeds, noEligibleBeds.residentIds[0], null, 'whole_room'), /at least one active vacant bed/);
+    const twoBedRoom = await fixture('Available', ['Vacant', 'Vacant']);
+    await create(twoBedRoom, twoBedRoom.residentIds[0], null, 'whole_room');
+    row = await occupancy(twoBedRoom.roomId);
+    assert.equal(row.occupied, 1); assert.equal(row.available, 0); assert.equal(row.blocked, 1); assert.equal(row.capacity, 2);
+    assert.equal(await countAdmissions(twoBedRoom.roomId), 1);
 
     const conversion = await fixture();
     await create(conversion, conversion.residentIds[0], conversion.beds[0], 'single_bed');
     await create(conversion, conversion.residentIds[1], conversion.beds[1], 'single_bed');
     await assert.rejects(db.query("update admissions set allocation_mode='whole_room' where resident_id=$1 and status='Pending'", [conversion.residentIds[0]]), /no other current admission/);
+
+    const editSource = await fixture();
+    const editRoom = await create(editSource, editSource.residentIds[0], null, 'whole_room');
+    const originalPrimary = (await one('select bed_id from admissions where id=$1', [editRoom.admission_id])).bed_id;
+    await db.query("update admissions set notes='unrelated edit' where id=$1", [editRoom.admission_id]);
+    assert.equal((await one('select bed_id from admissions where id=$1', [editRoom.admission_id])).bed_id, originalPrimary, 'Unrelated Whole Room edit preserves primary bed');
+    const newEditRoom = await fixture();
+    await db.query('update admissions set room_id=$1,bed_id=null where id=$2', [newEditRoom.roomId, editRoom.admission_id]);
+    assert.equal((await one('select bed_id from admissions where id=$1', [editRoom.admission_id])).bed_id, newEditRoom.beds[0], 'Changing an exclusive room resolves its primary bed in the database');
+    assert.equal((await one('select status from beds where id=$1', [originalPrimary])).status, 'Vacant');
 
     await db.query("update admissions set allocation_mode='single_bed' where id=$1", [exclusive.admission_id]);
     row = await occupancy(privateRoom.roomId);
@@ -145,7 +165,7 @@ function loadPure(name) {
     try {
       raceResults = await Promise.all(race.residentIds.slice(0, 2).map((residentId, index) => one(
         'select public.create_admission_package($1,$2,$3,$4,$5,$6,$7,$8) as result',
-        [residentId, race.roomId, race.beds[index], '2026-10-01', 17000, 0, '', 'whole_room'],
+        [residentId, race.roomId, null, '2026-10-01', 17000, 0, '', 'whole_room'],
       ).then(result => ({ ok: true, result: result.result }), error => ({ ok: false, error }))));
     } finally {
       await db.exec('reset role');
@@ -176,6 +196,9 @@ function loadPure(name) {
     const formSource = fs.readFileSync(path.join(__dirname, '..', 'components/admissions/AdmissionForm.tsx'), 'utf8');
     assert.match(formSource, /useState<AllocationMode>\("single_bed"\)/);
     assert.match(formSource, /Books the entire room for this resident\. No other bed in this room can be allocated while this admission is current\./);
+    assert.match(formSource, /allocationMode === "single_bed" \? \(/);
+    assert.match(formSource, /p_bed_id: allocationMode === "whole_room" \? null : bedId/);
+    assert.match(formSource, /Whole Room Reservation/);
 
     console.log('PASS exclusive-room PostgreSQL: default Single Bed, exclusive logical blocking, one resident, conflict/invalid-bed checks, lock-backed competing invocation gate, conversion/lifecycle release, historical defaults, finance package, and restricted RPC grants.');
   } finally {

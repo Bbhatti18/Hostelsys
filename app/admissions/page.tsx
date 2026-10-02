@@ -338,7 +338,7 @@ export default function AdmissionsPage() {
     setForm((current) => ({
       ...current,
       [key]: value,
-      ...(key === "room_id" ? { bed_id: "" } : {}),
+      ...(key === "room_id" || key === "allocation_mode" && value === "single_bed" ? { bed_id: "" } : {}),
     }));
   }
 
@@ -388,10 +388,10 @@ export default function AdmissionsPage() {
     if (
       !form.resident_id ||
       !form.room_id ||
-      !form.bed_id ||
+      (form.allocation_mode === "single_bed" && !form.bed_id) ||
       !form.admission_date
     ) {
-      setError("Resident, room, bed, and admission date are required.");
+      setError(`Resident, room, ${form.allocation_mode === "single_bed" ? "bed, " : ""}and admission date are required.`);
       return;
     }
 
@@ -427,7 +427,7 @@ export default function AdmissionsPage() {
     const previousWasCurrent = isCurrentAdmissionStatus(
       previousAdmission.status,
     );
-    const bedChanged = previousAdmission.bed_id !== form.bed_id;
+    const bedChanged = previousAdmission.bed_id !== (form.bed_id || null);
 
     const [
       residentResult,
@@ -446,12 +446,10 @@ export default function AdmissionsPage() {
           .select("id, status")
           .eq("id", form.room_id)
           .maybeSingle(),
-        supabase
-          .from("beds")
-          .select("id, room_id, status")
-          .eq("id", form.bed_id)
-          .maybeSingle(),
-        targetIsCurrent
+        form.bed_id
+          ? supabase.from("beds").select("id, room_id, status").eq("id", form.bed_id).maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+        targetIsCurrent && form.bed_id
           ? supabase
               .from("admissions")
               .select("id")
@@ -510,9 +508,11 @@ export default function AdmissionsPage() {
     }
 
     if (
-      !selectedBedResult.data ||
-      selectedBedResult.data.room_id !== form.room_id ||
-      selectedBedResult.data.status === BED_STATUS.INACTIVE
+      (form.allocation_mode === "single_bed" || form.bed_id) && (
+        !selectedBedResult.data ||
+        selectedBedResult.data.room_id !== form.room_id ||
+        selectedBedResult.data.status === BED_STATUS.INACTIVE
+      )
     ) {
       setError("The selected bed is not available for this admission.");
       await refresh();
@@ -551,9 +551,10 @@ export default function AdmissionsPage() {
 
     const needsNewBedClaim =
       targetIsCurrent &&
+      form.allocation_mode === "single_bed" &&
       (bedChanged ||
         !previousWasCurrent ||
-        selectedBedResult.data.status !== BED_STATUS.OCCUPIED);
+        selectedBedResult.data?.status !== BED_STATUS.OCCUPIED);
 
     if (needsNewBedClaim) {
       const { data: claimedBed, error: claimError } = await supabase
@@ -1186,36 +1187,22 @@ export default function AdmissionsPage() {
                   {form.allocation_mode === "whole_room" && <span className="mt-2 block text-xs text-slate-600">Books the entire room while this admission is Pending or Active.</span>}
                 </Field>
 
-                <Field label="Bed *">
-                  <select
-                    required
-                    value={form.bed_id}
-                    onChange={(event) =>
-                      updateField("bed_id", event.target.value)
-                    }
-                    className={inputClass}
-                    disabled={!form.room_id || saving}
-                  >
-                    <option value="">
-                      {form.room_id ? "Select bed" : "Select a room first"}
-                    </option>
-
-                    {filteredBeds.map((bed) => {
-                      if (bed.isAllocatable) {
-                        return (
-                          <option key={bed.id} value={bed.id}>
-                            🟢 {normalizeBedLabel(bed.bed_number)} — {bed.isCurrentBed ? "Currently Assigned Bed ✓" : "Available"}
-                          </option>
-                        );
-                      }
-                      return (
-                        <option key={bed.id} value={bed.id} disabled>
-                            🔴 {normalizeBedLabel(bed.bed_number)} — {bed.occupantName ? `Occupied by ${bed.occupantName}` : admissions.some(item => item.room_id === form.room_id && item.allocation_mode === "whole_room") ? "Blocked by Whole-Room Allocation" : `${bed.status} (Unavailable)`}
-                        </option>
-                      );
-                    })}
+                {form.allocation_mode === "single_bed" ? <Field label="Bed *">
+                  <select required value={form.bed_id} onChange={event => updateField("bed_id", event.target.value)} className={inputClass} disabled={!form.room_id || saving}>
+                    <option value="">{form.room_id ? "Select bed" : "Select a room first"}</option>
+                    {filteredBeds.map(bed => bed.isAllocatable
+                      ? <option key={bed.id} value={bed.id}>🟢 {normalizeBedLabel(bed.bed_number)} — {bed.isCurrentBed ? "Currently Assigned Bed ✓" : "Available"}</option>
+                      : <option key={bed.id} value={bed.id} disabled>🔴 {normalizeBedLabel(bed.bed_number)} — {bed.occupantName ? `Occupied by ${bed.occupantName}` : admissions.some(item => item.room_id === form.room_id && item.allocation_mode === "whole_room") ? "Blocked by Whole-Room Allocation" : `${bed.status} (Unavailable)`}</option>)}
                   </select>
-                </Field>
+                </Field> : <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 md:col-span-2" aria-live="polite">
+                  <h3 className="font-semibold">Whole Room Reservation</h3>
+                  <p className="mt-1">{form.room_id ? `${beds.filter(bed => bed.room_id === form.room_id && bed.status !== BED_STATUS.INACTIVE).length} active beds will be reserved exclusively for this resident.` : "Select an eligible room to preview the reserved beds."}</p>
+                  {form.room_id && <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">{beds.filter(bed => bed.room_id === form.room_id && bed.status !== BED_STATUS.INACTIVE).map(bed => {
+                    const primary = bed.id === form.bed_id;
+                    const existingExclusive = admissions.some(admission => admission.id === editingId && admission.allocation_mode === "whole_room" && admission.room_id === form.room_id);
+                    return <li key={bed.id}>{normalizeBedLabel(bed.bed_number)} — {primary ? "Primary bed" : existingExclusive ? "Blocked by Whole-Room Allocation" : "Will be reserved"}</li>;
+                  })}</ul>}
+                </section>}
 
                 <Field label="Admission Date *">
                   <input
