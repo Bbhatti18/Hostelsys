@@ -43,8 +43,8 @@ export default function DashboardStats({ data }: { data: DashboardData }) {
     { label: "Active Residents", value: stats.totalResidents, color: "text-blue-600 dark:text-blue-400" },
     { label: "Total Revenue", value: money(stats.totalRevenue), color: "text-emerald-600 dark:text-emerald-400" },
     { label: "Current Admission Dues", value: money(stats.totalOutstanding), color: "text-red-600 dark:text-red-400" },
-    { label: "Security Deposits Held", value: money(stats.securityDepositsHeld), sub: "Verified resident security deposits currently held.", color: "text-amber-700 dark:text-amber-400" },
-    { label: "Bed Occupancy", value: `${stats.bedOccupancyRate}%`, sub: `${stats.occupiedBeds} physically occupied / ${stats.bookableBeds} bookable`, color: "text-indigo-600 dark:text-indigo-400" },
+    { label: "Security Deposits Held", value: money(stats.securityDepositsHeld), color: "text-amber-700 dark:text-amber-400" },
+    { label: "Bed Occupancy", value: `${stats.bedOccupancyRate}%`, color: "text-indigo-600 dark:text-indigo-400" },
   ];
 
   return (
@@ -54,7 +54,6 @@ export default function DashboardStats({ data }: { data: DashboardData }) {
           <p className="text-sm font-medium text-slate-500 dark:text-slate-400">{card.label}</p>
           <div className="mt-2 flex flex-wrap items-baseline gap-2">
             <p className={`text-2xl font-bold sm:text-3xl ${card.color}`}>{card.value}</p>
-            {card.sub && <p className="text-sm font-medium text-slate-500 dark:text-slate-400">({card.sub})</p>}
           </div>
         </article>
       ))}
