@@ -248,6 +248,10 @@ export default function ResidentsPage() {
   const [idCardFileName, setIdCardFileName] = useState("");
   const [guardianFrontFile, setGuardianFrontFile] = useState<File | null>(null);
   const [guardianFrontFileName, setGuardianFrontFileName] = useState("");
+  const [residentBackFile, setResidentBackFile] = useState<File | null>(null);
+  const [residentBackFileName, setResidentBackFileName] = useState("");
+  const [guardianBackFile, setGuardianBackFile] = useState<File | null>(null);
+  const [guardianBackFileName, setGuardianBackFileName] = useState("");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -574,14 +578,18 @@ export default function ResidentsPage() {
     setForm(emptyForm);
     setGuardianFrontFile(null);
     setGuardianFrontFileName("");
+    setResidentBackFile(null);
+    setResidentBackFileName("");
+    setGuardianBackFile(null);
+    setGuardianBackFileName("");
     setShowForm(false);
   }
 
-  async function uploadGuardianFrontDocument(residentId: string, file: File) {
+  async function uploadCreateDocument(residentId: string, slot: "resident_back" | "guardian_front" | "guardian_back", file: File) {
     const { data } = await supabase.auth.getSession();
-    if (!data.session) throw new Error("Please sign in again before uploading the Guardian Front document.");
+    if (!data.session) throw new Error("Please sign in again before uploading the identity document.");
     const body = new FormData();
-    body.set("slot", "guardian_front");
+    body.set("slot", slot);
     body.set("file", file);
     const response = await fetch(`/api/resident-portal/profile/documents?residentId=${encodeURIComponent(residentId)}`, {
       method: "POST",
@@ -590,34 +598,40 @@ export default function ResidentsPage() {
       body,
     });
     const result = await response.json().catch(() => null) as { error?: string } | null;
-    if (!response.ok) throw new Error(result?.error || "The Guardian Front document could not be uploaded.");
+    if (!response.ok) throw new Error(result?.error || "The identity document could not be uploaded.");
   }
 
-  async function handleGuardianFrontSelection(event: ChangeEvent<HTMLInputElement>) {
+  async function prepareCreateDocument(event: ChangeEvent<HTMLInputElement>, slot: "resident_back" | "guardian_front" | "guardian_back", setFile: (file: File | null) => void, setFileName: (name: string) => void) {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    const invalid = profileDocumentError("guardian_front", file.type, file.size);
-    if (invalid) {
-      setGuardianFrontFile(null);
-      setGuardianFrontFileName("");
-      setError(invalid);
-      return;
-    }
+    const invalid = profileDocumentError(slot, file.type, file.size);
+    if (invalid) { setFile(null); setFileName(""); setError(invalid); return; }
     try {
-      const prepared = await compressProfileImage(file, "guardian_front");
-      const outputError = profileDocumentError("guardian_front", prepared.type, prepared.size);
+      const prepared = await compressProfileImage(file, slot);
+      const outputError = profileDocumentError(slot, prepared.type, prepared.size);
       if (outputError) throw new Error(outputError);
-      setGuardianFrontFile(prepared);
-      setGuardianFrontFileName(file.name);
+      setFile(prepared);
+      setFileName(file.name);
       setError("");
     } catch (selectionError) {
-      setGuardianFrontFile(null);
-      setGuardianFrontFileName("");
-      setError(selectionError instanceof Error ? selectionError.message : "Unable to prepare the Guardian Front document.");
+      setFile(null);
+      setFileName("");
+      setError(selectionError instanceof Error ? selectionError.message : "Unable to prepare the identity document.");
     }
   }
 
+  async function handleGuardianFrontSelection(event: ChangeEvent<HTMLInputElement>) {
+    await prepareCreateDocument(event, "guardian_front", setGuardianFrontFile, setGuardianFrontFileName);
+  }
+
+  async function handleResidentBackSelection(event: ChangeEvent<HTMLInputElement>) {
+    await prepareCreateDocument(event, "resident_back", setResidentBackFile, setResidentBackFileName);
+  }
+
+  async function handleGuardianBackSelection(event: ChangeEvent<HTMLInputElement>) {
+    await prepareCreateDocument(event, "guardian_back", setGuardianBackFile, setGuardianBackFileName);
+  }
   async function saveResident(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (documentsUploading) { setError("Wait for the document upload to finish before saving."); return; }
@@ -779,20 +793,27 @@ export default function ResidentsPage() {
         return;
       }
     }
-    if (savedResidentId && guardianFrontFile) {
-      try {
-        await uploadGuardianFrontDocument(String(savedResidentId), guardianFrontFile);
-        setGuardianFrontFile(null);
-        setGuardianFrontFileName("");
-      } catch (uploadError) {
-        if (!editingId) setEditingId(String(savedResidentId));
-        await refresh();
-        setMessage(successMessage);
-        setError(`Resident was saved, but the Guardian ${form.guardian_identity_type === "Passport" ? "Passport Identity Page" : "CNIC Front"} was NOT uploaded. The selected file is still pending; click Update Resident to retry. ${uploadError instanceof Error ? uploadError.message : "Upload failed."}`);
-        setSaving(false);
-        return;
+    if (savedResidentId) {
+      const pendingCreateDocuments = [
+        ...(form.resident_identity_type === "Passport" ? [] : [{ slot: "resident_back" as const, file: residentBackFile, label: "Resident CNIC Back", clear: () => { setResidentBackFile(null); setResidentBackFileName(""); } }]),
+        { slot: "guardian_front" as const, file: guardianFrontFile, label: form.guardian_identity_type === "Passport" ? "Guardian Passport Identity Page" : "Guardian CNIC Front", clear: () => { setGuardianFrontFile(null); setGuardianFrontFileName(""); } },
+        ...(form.guardian_identity_type === "Passport" ? [] : [{ slot: "guardian_back" as const, file: guardianBackFile, label: "Guardian CNIC Back", clear: () => { setGuardianBackFile(null); setGuardianBackFileName(""); } }]),
+      ].filter(item => item.file);
+      for (const item of pendingCreateDocuments) {
+        try {
+          await uploadCreateDocument(String(savedResidentId), item.slot, item.file!);
+          item.clear();
+        } catch (uploadError) {
+          if (!editingId) setEditingId(String(savedResidentId));
+          await refresh();
+          setMessage(successMessage);
+          setError(`Resident was saved, but ${item.label} was NOT uploaded. The selected file is still pending; click Update Resident to retry. ${uploadError instanceof Error ? uploadError.message : "Upload failed."}`);
+          setSaving(false);
+          return;
+        }
       }
     }
+    setMessage(successMessage);
     setMessage(successMessage);
     closeForm();
     await refresh();
@@ -1052,9 +1073,9 @@ export default function ResidentsPage() {
                 <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
                   <p>Resident: {form.resident_identity_type === "Passport" ? "Passport identity page required; no back required." : "CNIC front and back required."}</p>
                   <p>Guardian: {form.guardian_identity_type === "Passport" ? "Passport identity page required; no back required." : "CNIC front and back required."}</p>
-                  <p>Upload backs and guardian documents after saving the resident.</p>
+                  <p>Identity documents selected here are securely uploaded after the resident is saved.</p>
                 </div>
-                {editingId ? <ProfileDocuments key={editingId} onBusyChange={setDocumentsUploading} residentId={editingId} residentType={form.resident_identity_type || "CNIC"} guardianType={form.guardian_identity_type || "CNIC"} slots={["resident_front", "resident_back", "guardian_front", "guardian_back"]} /> : <p className="text-sm text-slate-500">After saving the resident, use Edit to upload additional private identity documents.</p>}
+                {editingId ? <ProfileDocuments key={editingId} onBusyChange={setDocumentsUploading} residentId={editingId} residentType={form.resident_identity_type || "CNIC"} guardianType={form.guardian_identity_type || "CNIC"} slots={["resident_front", "resident_back", "guardian_front", "guardian_back"]} /> : <p className="text-sm text-slate-500">Select the required identity documents below. You can manage or replace them later from Edit.</p>}
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <Field label="Resident Photo">
                   <div className="space-y-2">
@@ -1072,6 +1093,18 @@ export default function ResidentsPage() {
                   <div className="space-y-2">
                     <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handleGuardianFrontSelection} className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100" />
                     {guardianFrontFileName ? <p className="text-xs text-slate-500">Selected: {guardianFrontFileName}</p> : null}
+                  </div>
+                </Field>}
+                {(!editingId && form.resident_identity_type !== "Passport") && <Field label="Resident CNIC Back">
+                  <div className="space-y-2">
+                    <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={handleResidentBackSelection} className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100" />
+                    {residentBackFileName ? <p className="text-xs text-slate-500">Selected: {residentBackFileName}</p> : null}
+                  </div>
+                </Field>}
+                {(!editingId && form.guardian_identity_type !== "Passport") && <Field label="Guardian CNIC Back">
+                  <div className="space-y-2">
+                    <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={handleGuardianBackSelection} className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100" />
+                    {guardianBackFileName ? <p className="text-xs text-slate-500">Selected: {guardianBackFileName}</p> : null}
                   </div>
                 </Field>}
                 </div>
