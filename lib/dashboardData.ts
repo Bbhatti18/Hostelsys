@@ -12,6 +12,8 @@ export type DashboardData = {
   contracts: DashboardRow[];
   bills: DashboardRow[];
   payments: DashboardRow[];
+  lateFees: DashboardRow[];
+  lateFeeAllocations: DashboardRow[];
   receipts: DashboardRow[];
   rooms: DashboardRow[];
   beds: DashboardRow[];

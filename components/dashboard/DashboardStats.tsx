@@ -1,10 +1,10 @@
-import { buildResidentFinancialSummary } from "@/lib/residentFinancialSummary";
+import { dashboardCurrentAdmissionDues, dashboardOperatingRevenue, dashboardSecurityDepositsHeld } from "@/lib/dashboardFinance";
 import { summarizeBedInventory } from "@/lib/roomOccupancy";
 import { useMemo } from "react";
 import type { DashboardData } from "@/lib/dashboardData";
 
 export default function DashboardStats({ data }: { data: DashboardData }) {
-  const { residents, bills, payments, beds, admissions, rooms } = data;
+  const { residents, bills, payments, beds, admissions, rooms, lateFees, lateFeeAllocations } = data;
 
   const stats = useMemo(() => {
     // 1. Total Residents (Active)
@@ -21,14 +21,9 @@ export default function DashboardStats({ data }: { data: DashboardData }) {
     const totalBeds = beds.length;
     const bedOccupancyRate = totalBeds > 0 ? Math.round((occupiedBeds / totalBeds) * 100) : 0;
 
-    // 3. Revenue (All verified payments)
-    const totalRevenue = payments
-      .filter(p => String(p.payment_status || "").toLowerCase() === "verified")
-      .reduce((sum, p) => sum + Number(p.amount || 0), 0);
-
-    // Current account obligations share the portal calculation, including unbilled initial rent.
-    const totalOutstanding = admissions.filter(admission => ["Pending", "Active"].includes(String(admission.status)))
-      .reduce((sum, admission) => sum + buildResidentFinancialSummary({ admission, room: null, bed: null, bills, payments }).totalOutstanding, 0);
+    const totalRevenue = dashboardOperatingRevenue(payments, bills, lateFeeAllocations);
+    const totalOutstanding = dashboardCurrentAdmissionDues(admissions, bills, payments, lateFees);
+    const securityDepositsHeld = dashboardSecurityDepositsHeld(admissions, bills, payments);
 
     return {
       totalResidents,
@@ -38,8 +33,9 @@ export default function DashboardStats({ data }: { data: DashboardData }) {
       bedOccupancyRate,
       totalRevenue,
       totalOutstanding,
+      securityDepositsHeld,
     };
-  }, [residents, bills, payments, beds, admissions, rooms]);
+  }, [residents, bills, payments, beds, admissions, rooms, lateFees, lateFeeAllocations]);
 
   const money = (val: number) => `Rs ${val.toLocaleString()}`;
 
@@ -47,11 +43,12 @@ export default function DashboardStats({ data }: { data: DashboardData }) {
     { label: "Active Residents", value: stats.totalResidents, color: "text-blue-600 dark:text-blue-400" },
     { label: "Total Revenue", value: money(stats.totalRevenue), color: "text-emerald-600 dark:text-emerald-400" },
     { label: "Current Admission Dues", value: money(stats.totalOutstanding), color: "text-red-600 dark:text-red-400" },
+    { label: "Security Deposits Held", value: money(stats.securityDepositsHeld), sub: "Verified resident security deposits currently held.", color: "text-amber-700 dark:text-amber-400" },
     { label: "Bed Occupancy", value: `${stats.bedOccupancyRate}%`, sub: `${stats.occupiedBeds} physically occupied / ${stats.bookableBeds} bookable`, color: "text-indigo-600 dark:text-indigo-400" },
   ];
 
   return (
-    <div className="mb-10 grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="mb-10 grid gap-6 sm:grid-cols-2 xl:grid-cols-5">
       {cards.map((card) => (
         <article key={card.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6 dark:border-slate-700 dark:bg-slate-800">
           <p className="text-sm font-medium text-slate-500 dark:text-slate-400">{card.label}</p>

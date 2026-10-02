@@ -15,6 +15,7 @@ import { normalizeBedLabel } from "@/lib/bedLabels";
 
 const emptyData: DashboardData = {
   residents: [], admissions: [], contracts: [], bills: [], payments: [],
+  lateFees: [], lateFeeAllocations: [],
   receipts: [], rooms: [], beds: [], maintenance: [], inspections: [], notices: [],
 };
 
@@ -76,6 +77,8 @@ export default function DashboardPage() {
         supabase.from("notices").select("id::text,notice_number,title,status,publish_date,expiry_date,created_at,updated_at").order("created_at", { ascending: false }),
         supabase.from("rooms").select("id,room_number,status"),
         supabase.from("beds").select("id,room_id,bed_number,status"),
+        supabase.from("late_fees").select("id,bill_id,payable_amount,status"),
+        supabase.from("late_fee_payment_allocations").select("payment_id,amount,applied_at,reversed_at"),
       ].map(query => readDashboardRows<Record<string, unknown>>(query.order("id"))));
 
       const failed = results.find((result) => result.error)?.error;
@@ -89,6 +92,8 @@ export default function DashboardPage() {
           maintenance: results[6].data ?? [], inspections: results[7].data ?? [],
           notices: results[8].data ?? [], rooms: results[9].data ?? [],
           beds: results[10].data ?? [],
+          lateFees: results[11].data ?? [],
+          lateFeeAllocations: results[12].data ?? [],
         });
       }
       setSnapshotTime(new Date());

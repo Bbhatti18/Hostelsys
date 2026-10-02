@@ -17,9 +17,10 @@ import {
 
 import type { DashboardData } from "@/lib/dashboardData";
 import { summarizeBedInventory } from "@/lib/roomOccupancy";
+import { dashboardVerifiedPaymentRevenue } from "@/lib/dashboardFinance";
 
 export default function DashboardCharts({ data }: { data: DashboardData }) {
-  const { beds, payments, rooms, admissions } = data;
+  const { beds, payments, rooms, admissions, bills, lateFeeAllocations } = data;
 
   const occupancyData = useMemo(() => {
     const inventory = summarizeBedInventory(
@@ -54,23 +55,19 @@ export default function DashboardCharts({ data }: { data: DashboardData }) {
       months.set(label, 0);
     }
 
-    payments.forEach((payment: any) => {
-      const pStatus = (payment.payment_status || "").toLowerCase();
-      if (pStatus === "verified" || pStatus === "completed" || pStatus === "approved") {
-        const dateStr = payment.verified_at || payment.payment_date || payment.created_at;
-        const date = new Date(dateStr);
-        const label = date.toLocaleString("default", { month: "short", year: "numeric" });
-        if (months.has(label)) {
-          months.set(label, (months.get(label) || 0) + Number(payment.amount || 0));
-        }
+    for (const payment of dashboardVerifiedPaymentRevenue(payments, bills, lateFeeAllocations)) {
+      const date = new Date(payment.date);
+      const label = date.toLocaleString("default", { month: "short", year: "numeric" });
+      if (months.has(label)) {
+        months.set(label, (months.get(label) || 0) + payment.amount);
       }
-    });
+    }
 
     return Array.from(months.entries()).map(([month, amount]) => ({
       month,
       amount,
     }));
-  }, [payments]);
+  }, [payments, bills, lateFeeAllocations]);
 
   const COLORS = ["#4f46e5", "#10b981", "#f59e0b", "#94a3b8"];
 
