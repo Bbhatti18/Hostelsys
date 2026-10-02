@@ -395,6 +395,11 @@ export default function AdmissionsPage() {
       return;
     }
 
+    if (!/^\d+(\.\d{1,2})?$/.test(form.security_deposit || "0") || !Number.isFinite(Number(form.security_deposit || 0))) {
+      setError("Security Deposit must be a nonnegative amount with at most two decimals.");
+      return;
+    }
+
     setSaving(true);
     setMessage("");
     setError("");
@@ -541,7 +546,7 @@ export default function AdmissionsPage() {
       admission_date: form.admission_date,
       expected_leaving_date: form.expected_leaving_date || null,
       monthly_rent: Number(form.monthly_rent) || 0,
-      security_deposit: Number(form.security_deposit) || 0,
+      security_deposit: Number(form.security_deposit || 0),
       deposit_status: previousAdmission.deposit_status,
       notice_period_days: Number(form.notice_period_days) || 30,
       status: nextStatus,
@@ -608,7 +613,7 @@ export default function AdmissionsPage() {
       }
       setError(
         updateError
-          ? getSupabaseErrorMessage(
+          ? updateError.code === "P0001" ? updateError.message : getSupabaseErrorMessage(
               updateError,
               "Unable to update this admission. Please try again.",
             )
