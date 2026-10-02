@@ -1,3 +1,4 @@
+import { additionalChargeError } from "@/lib/additionalCharges";
 import { normalizeIdentityEmail } from "@/lib/identity";
 import { paymentBillAmounts } from "@/lib/paymentAllocations";
 import { receiptPurposeError } from "@/lib/paymentObligations";
@@ -85,7 +86,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = (await request.json().catch(() => null)) as
-      | { receiptId?: unknown; action?: unknown; rejectionReason?: unknown }
+      | { receiptId?: unknown; action?: unknown; rejectionReason?: unknown; additionalConfirmation?: { amount?: unknown; category?: unknown; description?: unknown; confirmed?: unknown } }
       | null;
     const receiptId =
       typeof body?.receiptId === "string" ? body.receiptId.trim() : "";
@@ -107,7 +108,7 @@ export async function POST(request: NextRequest) {
     const { data: receipt, error: receiptError } = await supabaseAdmin
       .from("payment_receipts")
       .select(
-        "id, resident_id, bill_id, payment_id, amount, reference_number, status, notes, remarks, verified_at",
+        "id, resident_id, bill_id, payment_id, amount, reference_number, status, notes, remarks, verified_at, additional_charge",
       )
       .eq("id", receiptId)
       .maybeSingle();
@@ -198,6 +199,20 @@ export async function POST(request: NextRequest) {
         },
         { headers: { "Cache-Control": "private, no-store" } },
       );
+    }
+
+    if (receipt.additional_charge) {
+      const confirmation = body?.additionalConfirmation;
+      if (confirmation?.confirmed !== true) return jsonError("Explicit Additional Charges confirmation is required.", 400);
+      const invalid = additionalChargeError(confirmation.amount, confirmation.category, confirmation.description);
+      if (invalid) return jsonError(invalid, 400);
+      const { data, error } = await supabaseAdmin.rpc("verify_additional_payment", {
+        p_receipt_id: receipt.id, p_verifier: verifier, p_amount: Number(confirmation.amount),
+        p_category: confirmation.category, p_description: confirmation.description,
+      });
+      if (error || !data) return jsonError(error?.message || "Additional payment could not be verified.", 409);
+      const notification = await notifyResidentEvent("payment_verified", receipt.id);
+      return NextResponse.json({ message: "Payment verified with separate canonical and Additional Charges allocations.", notificationWarning: notification.warning }, { headers: { "Cache-Control": "private, no-store" } });
     }
 
     if (existingPayment?.bill_id === null && existingPayment.id === receipt.payment_id) {

@@ -1,3 +1,4 @@
+import { additionalChargeError } from "@/lib/additionalCharges";
 import { normalizeIdentityEmail } from "@/lib/identity";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
@@ -47,12 +48,22 @@ export async function POST(request: NextRequest) {
     const depositBillId = String(formData.get("depositBillId") ?? "");
     const includeLateFee = formData.get("includeLateFee") === "true";
     const includeRent = formData.get("includeRent") !== "false";
+    const hasAdditional = formData.has("additionalAmount");
+    const additionalAmount = String(formData.get("additionalAmount") ?? "");
+    const additionalCategory = String(formData.get("additionalCategory") ?? "");
+    const additionalDescription = String(formData.get("additionalDescription") ?? "").trim();
+    if (hasAdditional) {
+      const invalid = additionalChargeError(additionalAmount, additionalCategory, additionalDescription);
+      if (invalid) return errorResponse(invalid, 400);
+      if (!/^\d+(\.\d{1,2})?$/.test(String(formData.get("amount") ?? ""))) return errorResponse("Submitted total must have at most two decimals.", 400);
+      if (includeLateFee) return errorResponse("Submit Late Fee separately using the existing Late Fee payment option.", 400);
+    }
     const amount = Math.round(Number(formData.get("amount")) * 100) / 100;
     const paymentMethod = String(formData.get("paymentMethod") ?? "").trim().slice(0, 100);
     const referenceNumber = String(formData.get("referenceNumber") ?? "").trim().slice(0, 120);
     const notes = String(formData.get("notes") ?? "").trim().slice(0, 2000);
     const file = formData.get("file");
-    if (!admissionId || !rentBillId || (!includeLateFee && !depositBillId) || !Number.isFinite(amount) || amount <= 0 || !paymentMethod || !(file instanceof File)) return errorResponse("Current obligations, amount, payment method, and receipt file are required.", 400);
+    if (!admissionId || (hasAdditional ? (!rentBillId && !depositBillId) : (!rentBillId || (!includeLateFee && !depositBillId))) || !Number.isFinite(amount) || amount <= 0 || !paymentMethod || !(file instanceof File)) return errorResponse("Current obligations, amount, payment method, and receipt file are required.", 400);
     if (includeLateFee && depositBillId && !includeRent) return errorResponse("A deposit plus fine payment must include rent.", 400);
     if (!SAFE_FILE_TYPES.has(file.type) || file.size <= 0 || file.size > MAX_FILE_SIZE) return errorResponse("Receipt files must be PDF, JPEG, or PNG and no larger than 5 MB.", 400);
     const buffer = await file.arrayBuffer();
@@ -70,17 +81,18 @@ export async function POST(request: NextRequest) {
     uploadedPath = `${resident.id}/combined/${admissionId}/${crypto.randomUUID()}-${safeFileName(file.name)}`;
     const { error: uploadError } = await supabaseAdmin.storage.from("payment-receipts").upload(uploadedPath, buffer, { contentType: file.type, cacheControl: "3600", upsert: false });
     if (uploadError) return errorResponse("The receipt file could not be uploaded. Please try again.", 500);
-    const purpose = includeLateFee
+    const purpose = hasAdditional ? [rentBillId ? "Rent" : "", depositBillId ? "Security Deposit" : "", "Additional Charges"].filter(Boolean).join(" + ") : includeLateFee
       ? [includeRent ? "Rent" : "", depositBillId ? "Security Deposit" : "", "Late Fee"].filter(Boolean).join(" + ")
       : "Rent + Security Deposit";
     const receiptNotes = [`Payment method: ${paymentMethod}`, `Payment purpose: ${purpose}`, `Admission ID: ${admissionId}`, notes].filter(Boolean).join("\n");
-    const { data, error } = await supabaseAdmin.rpc(includeLateFee ? "create_late_fee_payment_submission" : "create_combined_payment_submission", {
+    const { data, error } = await supabaseAdmin.rpc(hasAdditional ? "create_additional_payment_submission" : includeLateFee ? "create_late_fee_payment_submission" : "create_combined_payment_submission", {
       p_resident_id: resident.id,
       p_admission_id: admissionId,
-      p_rent_bill_id: rentBillId,
+      p_rent_bill_id: rentBillId || null,
       p_deposit_bill_id: depositBillId || null,
       ...(includeLateFee ? { p_include_rent: includeRent } : {}),
       p_amount: amount,
+      ...(hasAdditional ? { p_additional_amount: Number(additionalAmount), p_category: additionalCategory, p_description: additionalDescription } : {}),
       p_payment_method: paymentMethod,
       p_reference_number: referenceNumber,
       p_notes: receiptNotes,

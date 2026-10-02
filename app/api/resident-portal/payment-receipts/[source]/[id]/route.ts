@@ -98,6 +98,20 @@ export async function GET(request: NextRequest, context: { params: Promise<{ sou
       }
     }
 
+    if (!billId) {
+      const paymentId = source === "payment" ? record.id : record.payment_id;
+      const { data: allocated, error } = await supabaseAdmin.from("payment_allocations").select("bill_id,amount,bills(bill_type)").eq("payment_id", paymentId);
+      if (error) return errorResponse("Payment allocations could not be checked.", 500);
+      if (allocated?.length) {
+        if (Math.round(allocated.reduce((sum, row) => sum + Number(row.amount), 0) * 100) !== Math.round(Number(record.amount) * 100)) return errorResponse("Payment allocation total needs reconciliation.", 409);
+        billId = allocated[0].bill_id;
+        paymentType = [...new Set(allocated.map(row => {
+          const bill = Array.isArray(row.bills) ? row.bills[0] : row.bills;
+          return bill?.bill_type === "Other Charges" ? "Additional Charges" : value(bill?.bill_type) || "Bill payment";
+        }))].join(" + ");
+      }
+    }
+
     const [{ data: bill }, { data: admissionRows }, { data: settings }] = await Promise.all([
       billId ? supabaseAdmin.from("bills").select("id, bill_number, admission_id, billing_month").eq("id", billId).eq("resident_id", resident.id).maybeSingle() : Promise.resolve({ data: null }),
       supabaseAdmin.from("admissions").select("id, room_id, bed_id, status, created_at").eq("resident_id", resident.id).order("created_at", { ascending: false }),

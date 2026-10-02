@@ -1,3 +1,4 @@
+import { paymentBillAmounts } from "./paymentAllocations";
 /** Report projections and display-only joins. No database writes or finance calculations. */
 export type ReportRow = { id?: string | number; [key: string]: unknown };
 export type ReportSource = "residents" | "rooms" | "beds" | "admissions" | "bills" | "payments" | "maintenance_requests" | "inventory";
@@ -51,4 +52,16 @@ export function joinReportRows(rows: ReportRow[], source: ReportSource, lookup: 
       bed_number: source === "beds" ? row.bed_number : lookup.beds.get(key(bedId))?.bed_number ?? null,
     };
   });
+}
+
+/** Per-payment verified collection split; the parent total is counted only once. */
+export function paymentCollectionBreakdown(payment: ReportRow, bills: ReportRow[]) {
+  const allocations = (Array.isArray(payment.payment_allocations) ? payment.payment_allocations : []) as Array<{ bill_id: string; amount: number }>;
+  const split = { rent: 0, deposit: 0, other: 0 };
+  for (const allocation of paymentBillAmounts({ bill_id: payment.bill_id as string | null, payment_status: String(payment.payment_status), amount: Number(payment.amount) }, allocations)) {
+    const type = bills.find(bill => bill.id === allocation.bill_id)?.bill_type;
+    const key = type === "Rent" ? "rent" : type === "Security Deposit" ? "deposit" : "other";
+    split[key] += Number(allocation.amount);
+  }
+  return split;
 }

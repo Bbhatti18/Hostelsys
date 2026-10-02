@@ -121,7 +121,7 @@ export async function GET(request: NextRequest) {
           .order("created_at", { ascending: false }),
         supabaseAdmin
           .from("payment_receipts")
-          .select("id, payment_id, bill_id, resident_id, amount, reference_number, status, verified_by, verified_at, notes, created_at")
+          .select("id, payment_id, bill_id, resident_id, amount, reference_number, status, verified_by, verified_at, notes, created_at, additional_charge")
           .eq("resident_id", residentId)
           .order("created_at", { ascending: false }),
         admission?.room_id

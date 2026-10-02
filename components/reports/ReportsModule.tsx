@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { REPORT_COLUMNS, reportDate } from "@/lib/reportData";
+import { REPORT_COLUMNS, reportDate, paymentCollectionBreakdown } from "@/lib/reportData";
 import { normalizeBedLabel } from "@/lib/bedLabels";
 import { deriveBillStatus, roundMoney } from "@/lib/financials";
 import { BED_STATUS, isVacantBedStatus } from "@/lib/statuses";
@@ -409,6 +409,7 @@ export default function ReportsModule() {
 
     if (reportType === "Payments") {
       return payments.map((row) => {
+        const split = paymentCollectionBreakdown(row, bills);
         const bill = bills.find(
           (item) => text(item.id) === text(row.bill_id),
         );
@@ -436,6 +437,9 @@ export default function ReportsModule() {
             Method: first(row, ["payment_method"]),
             Reference: first(row, ["reference_number"]),
             Amount: money(row.amount),
+            "Verified Rent Bill Allocation": money(split.rent),
+            "Verified Deposit Allocation": money(split.deposit),
+            "Verified Other Charges Allocation": money(split.other),
             "Verification Status": first(
               row,
               ["payment_status"],

@@ -6,6 +6,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { ADDITIONAL_CATEGORIES, additionalChargeError, type AdditionalCharge } from "@/lib/additionalCharges";
 import { receiptAllocation } from "@/lib/paymentObligations";
 import PaymentsNavigation from "@/components/payments/PaymentsNavigation";
 import { supabase } from "@/lib/supabase";
@@ -24,6 +25,7 @@ type ReceiptStatus =
   | "Rejected";
 
 type PaymentReceipt = {
+  additional_charge?: AdditionalCharge | null;
   id: string;
   resident_id: string;
   bill_id: string | null;
@@ -118,6 +120,7 @@ async function getValidAccessToken() {
 }
 
 export default function PaymentVerificationPage() {
+  const [confirmations, setConfirmations] = useState<Record<string, { amount: string; category: string; description: string; confirmed: boolean }>>({});
   const [receipts, setReceipts] = useState<PaymentReceipt[]>([]);
   const [residents, setResidents] = useState<GenericRow[]>([]);
   const [payments, setPayments] = useState<GenericRow[]>([]);
@@ -234,6 +237,11 @@ export default function PaymentVerificationPage() {
         : "";
     if (nextStatus === "Rejected" && !rejectionReason) return;
 
+    const additionalConfirmation = confirmations[receipt.id];
+    if (nextStatus === "Verified" && receipt.additional_charge) {
+      const invalid = additionalChargeError(additionalConfirmation?.amount, additionalConfirmation?.category, additionalConfirmation?.description);
+      if (!additionalConfirmation?.confirmed || invalid) { setError(invalid || "Confirm the Additional Charges against the receipt before verifying."); return; }
+    }
     setUpdatingId(receipt.id);
     setMessage("");
     setError("");
@@ -256,6 +264,7 @@ export default function PaymentVerificationPage() {
           receiptId: receipt.id,
           action: nextStatus === "Verified" ? "Verify" : "Reject",
           rejectionReason,
+          additionalConfirmation,
         }),
       });
       const payload = (await response.json().catch(() => null)) as
@@ -421,6 +430,9 @@ export default function PaymentVerificationPage() {
                       .map((allocation) => bills.find((item) => text(item.id) === allocation.bill_id))
                       .filter(Boolean);
 
+                    const extra = receipt.additional_charge;
+                    const confirmation = confirmations[receipt.id] ?? { amount: String(extra?.amount ?? ""), category: extra?.category ?? ADDITIONAL_CATEGORIES[0], description: extra?.description ?? "", confirmed: false };
+                    const editConfirmation = (change: Partial<typeof confirmation>) => setConfirmations(current => ({ ...current, [receipt.id]: { ...confirmation, ...change } }));
                     const allocation = bill ? receiptAllocation(bill, payments.filter(payment => payment.id !== receipt.payment_id), Number(receipt.amount)) : null;
                     return (
                       <tr
@@ -439,7 +451,7 @@ export default function PaymentVerificationPage() {
 
                         <td className="px-5 py-4 text-sm text-slate-700">
                           {paymentAllocationRows.length > 1
-                            ? "Rent + Security Deposit"
+                            ? allocationBills.map(item => item?.bill_type === "Other Charges" && extra ? "Additional Charges" : String(item?.bill_type || "Bill payment")).join(" + ")
                             : !receipt.bill_id && isSecurityDepositReceipt(receipt.notes)
                             ? "Security Deposit"
                             : firstText(bill, ["bill_number"]) || "No bill"}
@@ -469,6 +481,19 @@ export default function PaymentVerificationPage() {
 
                         <td className="max-w-xs px-5 py-4 text-sm text-slate-700">
                           {receiptNotes(receipt)}
+                          {extra && <div className="mt-3 min-w-56 space-y-2 rounded-lg border p-3">
+                            {paymentAllocationRows.map(item => <p key={item.bill_id}>{bills.find(b => b.id === item.bill_id)?.bill_type === "Other Charges" ? "Additional Charges" : String(bills.find(b => b.id === item.bill_id)?.bill_type || "Bill")}: {money(item.amount)}</p>)}
+                            <p>Declared Additional Charges: {money(extra.amount)} + {extra.category}</p>
+                            <p>Description: {extra.description || "None"}</p>
+                            <p className="font-semibold">Submitted Total: {money(receipt.amount)}</p>
+                            {extra.confirmed && <p>Staff classification: {extra.confirmed.category} + {money(extra.confirmed.amount)} + {extra.confirmed.description}</p>}
+                            {receipt.status === "Pending Verification" && <>
+                              <label className="block">Confirm Additional Amount (PKR)<input type="number" min="0.01" step="0.01" value={confirmation.amount} onChange={e => editConfirmation({ amount: e.target.value, confirmed: false })} className={inputClass} /></label>
+                              <label className="block">Confirm Category<select value={confirmation.category} onChange={e => editConfirmation({ category: e.target.value, confirmed: false })} className={inputClass}>{ADDITIONAL_CATEGORIES.map(category => <option key={category}>{category}</option>)}</select></label>
+                              <label className="block">Description<input maxLength={500} value={confirmation.description} onChange={e => editConfirmation({ description: e.target.value, confirmed: false })} className={inputClass} /></label>
+                              <label className="flex gap-2"><input type="checkbox" checked={confirmation.confirmed} onChange={e => editConfirmation({ confirmed: e.target.checked })} />I checked the receipt total and confirm this classification.</label>
+                            </>}
+                          </div>}
                         </td>
 
                         <td className="px-5 py-4">

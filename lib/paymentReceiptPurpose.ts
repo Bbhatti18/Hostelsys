@@ -44,3 +44,11 @@ export function residentReceiptNotes(notes: unknown) {
     .join(" ")
     .trim();
 }
+
+/** Labels come from actual allocated bill types, never the allocation count. */
+export function allocatedPaymentLabel(allocations: Array<{ bill_id: string }>, bills: Array<Record<string, unknown>>) {
+  return [...new Set(allocations.map(allocation => {
+    const bill = bills.find(row => row.id === allocation.bill_id);
+    return bill?.bill_type === "Other Charges" ? "Additional Charges" : String(bill?.bill_type || "");
+  }).filter(Boolean))].join(" + ");
+}

@@ -78,7 +78,7 @@ function database(rows) {
 }
 function modules(client, principalEmail = 'staff@test.invalid') {
   const cache = new Map();
-  const files = new Set(['lib/identity.ts', 'lib/financials.ts', 'lib/financialMath.ts', 'lib/billApproval.ts', 'lib/paymentObligations.ts', 'lib/paymentAllocations.ts', 'lib/residentFinancialSummary.ts', 'lib/paymentReceiptPurpose.ts', 'app/api/payment-verification/route.ts']);
+  const files = new Set(['lib/additionalCharges.ts', 'lib/identity.ts', 'lib/financials.ts', 'lib/financialMath.ts', 'lib/billApproval.ts', 'lib/paymentObligations.ts', 'lib/paymentAllocations.ts', 'lib/residentFinancialSummary.ts', 'lib/paymentReceiptPurpose.ts', 'app/api/payment-verification/route.ts']);
   function load(file) {
     assert.ok(files.has(file), `Unexpected executable module ${file}`);
     if (cache.has(file)) return cache.get(file);
