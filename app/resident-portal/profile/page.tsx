@@ -27,9 +27,28 @@ function residentName(resident: Resident | null) { return resident?.full_name ||
 
 export default function ResidentProfilePage() {
   const [resident, setResident] = useState<Resident | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [sessionMissing, setSessionMissing] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setPhotoPreview(null);
+    if (/^data:image\/(jpeg|png|webp);base64,/.test(resident?.photo_url || "")) {
+      setPhotoPreview(resident?.photo_url || null);
+      return;
+    }
+    if (resident?.photo_url) void (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!data.session) return;
+      const response = await fetch("/api/resident-portal/profile/documents", { cache: "no-store", headers: { Authorization: `Bearer ${data.session.access_token}` } });
+      if (!response.ok) return;
+      const result = await response.json();
+      if (active) setPhotoPreview(result.documents?.find((document: { slot: string; url: string | null }) => document.slot === "photo")?.url || null);
+    })().catch(() => { /* Keep the existing initials fallback if preview is unavailable. */ });
+    return () => { active = false; };
+  }, [resident?.id, resident?.photo_url]);
 
   useEffect(() => {
     async function loadProfile() {
@@ -130,9 +149,9 @@ export default function ResidentProfilePage() {
           <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
             <div className="flex flex-col gap-6 md:flex-row">
               <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-3xl bg-indigo-100 text-3xl font-bold text-indigo-700 sm:h-28 sm:w-28 sm:text-4xl">
-                {resident.photo_url ? (
+                {photoPreview ? (
                   <Image
-                    src={resident.photo_url}
+                    src={photoPreview}
                     alt={residentName(resident)}
                     width={112}
                     height={112}

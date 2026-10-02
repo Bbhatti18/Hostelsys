@@ -18,7 +18,7 @@ export default function EmergencyContacts({ contacts, onChange, readOnly = false
       <label className="text-sm">Phone Number<input aria-label={`Contact ${i + 1} phone`} disabled={readOnly} className="mt-1 w-full rounded-lg border p-2 disabled:bg-slate-100" value={contact.phone} maxLength={50} onChange={e => change(i, "phone", e.target.value)} /></label>
       {!readOnly && !contact.id && <button type="button" className="text-left text-sm text-red-700" onClick={() => onChange?.(contacts.filter((_, n) => n !== i))}>Remove unsaved contact</button>}
     </div>)}
-    {!readOnly && contacts.length < 20 && <button type="button" className="rounded-lg border px-4 py-2 text-sm font-semibold" onClick={() => onChange?.([...contacts, { contact_name: "", relationship: "", phone: "" }])}>Add emergency contact</button>}
+    {!readOnly && contacts.length < 20 && <button type="button" className="rounded-lg border px-4 py-2 text-sm font-semibold" onClick={() => onChange?.([...contacts, { contact_name: "", relationship: "", phone: "" }])}>+ Add Another Emergency Contact</button>}
     {readOnly && contacts.length === 0 && <p className="text-sm text-slate-500">No additional contacts recorded.</p>}
   </div>;
 }

@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     const id = await identity(request);
     if (!id) return response({ error: "Please sign in with your resident account." }, 403);
     const [resident, completion, contacts] = await Promise.all([
-      supabaseAdmin.from("residents").select(["id", "full_name", "emergency_contact", "emergency_contact_name", "emergency_contact_relationship", ...profileFields.map(([key]) => key)].join(",")).eq("id", id).single(),
+      supabaseAdmin.from("residents").select(["id", "full_name", "resident_code", "phone", "email", "emergency_contact", "emergency_contact_name", "emergency_contact_relationship", ...profileFields.map(([key]) => key)].join(",")).eq("id", id).single(),
       supabaseAdmin.from("resident_profile_completions").select("draft,draft_contacts,submitted_at").eq("resident_id", id).maybeSingle(),
       supabaseAdmin.from("resident_emergency_contacts").select("id,contact_name,relationship,phone").eq("resident_id", id).order("created_at"),
     ]);

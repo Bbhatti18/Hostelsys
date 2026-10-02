@@ -3,6 +3,7 @@ export const profileFields = [
   ["permanent_address", "Permanent Address"], ["city", "City"], ["nationality", "Nationality"],
   ["occupation", "Occupation"], ["company_university", "Company / University"],
   ["father_name", "Guardian Name"], ["guardian_cnic", "Guardian CNIC / Passport"], ["guardian_phone", "Guardian Phone"],
+  ["resident_identity_type", "Resident Identity Document Type"], ["guardian_identity_type", "Guardian Identity Document Type"],
 ] as const;
 export const contactRelationships = ["Father", "Mother", "Brother", "Sister", "Guardian", "Spouse", "Uncle", "Aunt", "Other"];
 export type EmergencyContact = { id?: string; contact_name: string; relationship: string; phone: string };

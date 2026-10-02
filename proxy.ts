@@ -38,6 +38,8 @@ const loginPath = "/login";
 // so they must not be redirected to /login when cookies are absent.
 const selfAuthenticatedApiPaths = new Set([
   residentPortalDataPath,
+  "/api/resident-portal/profile",
+  "/api/resident-portal/profile/documents",
   "/api/billing/bulk-generate",
   "/api/billing/approve",
   // Both verify a staff bearer token, an active staff_users row and an

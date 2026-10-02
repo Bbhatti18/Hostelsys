@@ -21,6 +21,9 @@ import {
   type ResidentStatus,
 } from "@/lib/statuses";
 
+import ProfileDocuments from "@/components/residents/ProfileDocuments";
+import { profileDocumentError } from "@/lib/profileDocuments";
+import { compressProfileImage } from "@/lib/compressProfileImage";
 import EmergencyContacts from "@/components/residents/EmergencyContacts";
 import StaffProfileContacts from "@/components/residents/StaffProfileContacts";
 import { contactRelationships, type EmergencyContact } from "@/lib/residentProfile";
@@ -31,6 +34,8 @@ type Resident = {
   id: string;
   resident_code?: string | null;
   full_name: string;
+  resident_identity_type?: string | null;
+  guardian_identity_type?: string | null;
   guardian_cnic?: string | null;
   guardian_phone?: string | null;
   father_name?: string | null;
@@ -57,6 +62,8 @@ type Resident = {
 type ResidentForm = {
   resident_code: string;
   full_name: string;
+  resident_identity_type: string;
+  guardian_identity_type: string;
   guardian_cnic: string;
   guardian_phone: string;
   father_name: string;
@@ -109,6 +116,8 @@ type ProfileState = {
 const emptyForm: ResidentForm = {
   resident_code: "",
   full_name: "",
+  resident_identity_type: "",
+  guardian_identity_type: "",
   guardian_cnic: "",
   guardian_phone: "",
   father_name: "",
@@ -199,6 +208,7 @@ async function readFileAsDataUrl(file: File) {
 export default function ResidentsPage() {
   const [extraContacts, setExtraContacts] = useState<EmergencyContact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
+  const [documentsUploading, setDocumentsUploading] = useState(false);
   const [contactsVersion, setContactsVersion] = useState(0);
   const retryContactsFor = useRef<string | null>(null);
   const [residents, setResidents] = useState<Resident[]>([]);
@@ -523,6 +533,8 @@ export default function ResidentsPage() {
     setForm({
       resident_code: resident.resident_code ?? "",
       full_name: resident.full_name,
+      resident_identity_type: resident.resident_identity_type ?? "",
+      guardian_identity_type: resident.guardian_identity_type ?? "",
       guardian_cnic: resident.guardian_cnic ?? "",
       guardian_phone: resident.guardian_phone ?? "",
       father_name: resident.father_name ?? "",
@@ -559,6 +571,7 @@ export default function ResidentsPage() {
 
   async function saveResident(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (documentsUploading) { setError("Wait for the document upload to finish before saving."); return; }
     if (contactsLoading) {
       setError("Emergency contacts are still loading. Reopen Edit if loading failed.");
       return;
@@ -633,6 +646,8 @@ export default function ResidentsPage() {
     const payload = {
       resident_code: form.resident_code.trim() || generateResidentCode(residents),
       full_name: form.full_name.trim(),
+      resident_identity_type: form.resident_identity_type || null,
+      guardian_identity_type: form.guardian_identity_type || null,
       guardian_cnic: form.guardian_cnic.trim() || null,
       guardian_phone: form.guardian_phone.trim() || null,
       father_name: form.father_name.trim() || null,
@@ -818,12 +833,17 @@ export default function ResidentsPage() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    const invalid = profileDocumentError("photo", file.type, file.size);
+    if (invalid || file.type === "application/pdf") { setError(invalid || "Use an image for this legacy upload field."); return; }
     try {
-      const dataUrl = await readFileAsDataUrl(file);
+      const prepared = await compressProfileImage(file, "photo");
+      const outputError = profileDocumentError("photo", prepared.type, prepared.size);
+      if (outputError) throw new Error(outputError);
+      const dataUrl = await readFileAsDataUrl(prepared);
       setPhotoFileName(file.name);
       updateField("photo_url", dataUrl);
-    } catch {
-      setError("Unable to read the uploaded image.");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Unable to compress the uploaded image.");
     }
   }
 
@@ -831,12 +851,17 @@ export default function ResidentsPage() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    const invalid = profileDocumentError("resident_front", file.type, file.size);
+    if (invalid || file.type === "application/pdf") { setError(invalid || "Use an image for this legacy upload field."); return; }
     try {
-      const dataUrl = await readFileAsDataUrl(file);
+      const prepared = await compressProfileImage(file, "resident_front");
+      const outputError = profileDocumentError("resident_front", prepared.type, prepared.size);
+      if (outputError) throw new Error(outputError);
+      const dataUrl = await readFileAsDataUrl(prepared);
       setIdCardFileName(file.name);
       updateField("id_card_url", dataUrl);
-    } catch {
-      setError("Unable to read the uploaded ID card.");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Unable to compress the uploaded ID card.");
     }
   }
 
@@ -873,27 +898,17 @@ export default function ResidentsPage() {
 
             <form onSubmit={saveResident} className="space-y-6">
               {editingId && <StaffProfileContacts key={editingId} residentId={editingId} statusOnly />}
-              <fieldset disabled={saving || contactsLoading} className="space-y-3">
-                <h3 className="font-semibold">Additional Emergency Contacts</h3>
-                <EmergencyContacts contacts={extraContacts} onChange={setExtraContacts} />
-              </fieldset>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <section className="space-y-4">
+                <h3 className="text-lg font-semibold text-slate-900">Personal Information</h3>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <Field label="Resident Code">
                   <input value={form.resident_code} onChange={(event) => updateField("resident_code", event.target.value)} className={inputClass} placeholder="Auto-generated code" />
                 </Field>
                 <Field label="Full Name *">
                   <input required value={form.full_name} onChange={(event) => updateField("full_name", event.target.value)} className={inputClass} placeholder="Resident full name" />
                 </Field>
-                <Field label="Guardian Name">
+                <Field label="Father / Guardian Name">
                   <input value={form.father_name} onChange={(event) => updateField("father_name", event.target.value)} className={inputClass} placeholder="Guardian name" />
-                </Field>
-                <Field label="Guardian CNIC / Passport"><input value={form.guardian_cnic} onChange={event => updateField("guardian_cnic", event.target.value)} className={inputClass} /></Field>
-                <Field label="Guardian Phone"><input value={form.guardian_phone} onChange={event => updateField("guardian_phone", event.target.value)} className={inputClass} /></Field>
-                <Field label="CNIC / Passport *">
-                  <input required value={form.cnic} onChange={(event) => updateField("cnic", event.target.value)} className={inputClass} placeholder="Identification number" />
-                </Field>
-                <Field label="Date of Birth">
-                  <input type="date" value={form.dob} onChange={(event) => updateField("dob", event.target.value)} className={inputClass} />
                 </Field>
                 <Field label="Gender">
                   <select value={form.gender} onChange={(event) => updateField("gender", event.target.value)} className={inputClass}>
@@ -903,12 +918,30 @@ export default function ResidentsPage() {
                     <option value="Other">Other</option>
                   </select>
                 </Field>
+                <Field label="CNIC / Passport *">
+                  <input required value={form.cnic} onChange={(event) => updateField("cnic", event.target.value)} className={inputClass} placeholder="Identification number" />
+                </Field>
+                <Field label="Date of Birth">
+                  <input type="date" value={form.dob} onChange={(event) => updateField("dob", event.target.value)} className={inputClass} />
+                </Field>
                 <Field label="Phone *">
                   <input required value={form.phone} onChange={(event) => updateField("phone", event.target.value)} className={inputClass} placeholder="Phone number" />
                 </Field>
                 <Field label="Email *">
                   <input required type="email" value={form.email} onChange={(event) => updateField("email", event.target.value)} className={inputClass} placeholder="resident@example.com" />
                 </Field>
+                </div>
+              </section>
+              <section className="space-y-4">
+                <h3 className="text-lg font-semibold text-slate-900">Guardian Information</h3>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <Field label="Guardian CNIC / Passport"><input value={form.guardian_cnic} onChange={event => updateField("guardian_cnic", event.target.value)} className={inputClass} /></Field>
+                <Field label="Guardian Phone"><input value={form.guardian_phone} onChange={event => updateField("guardian_phone", event.target.value)} className={inputClass} /></Field>
+                </div>
+              </section>
+              <section className="space-y-4">
+                <h3 className="text-lg font-semibold text-slate-900">Emergency Contacts</h3>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <Field label="Emergency Contact Name">
                   <input value={form.emergency_contact_name} onChange={(event) => updateField("emergency_contact_name", event.target.value)} className={inputClass} placeholder="Emergency contact name" />
                 </Field>
@@ -924,6 +957,12 @@ export default function ResidentsPage() {
                 <Field label="Emergency Contact / Phone">
                   <input value={form.emergency_contact} onChange={(event) => updateField("emergency_contact", event.target.value)} className={inputClass} placeholder="Emergency phone" />
                 </Field>
+                </div>
+                <fieldset disabled={saving || contactsLoading}><EmergencyContacts contacts={extraContacts} onChange={setExtraContacts} /></fieldset>
+              </section>
+              <section className="space-y-4">
+                <h3 className="text-lg font-semibold text-slate-900">Address & Other Details</h3>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <Field label="Permanent Address" wide>
                   <textarea value={form.permanent_address} onChange={(event) => updateField("permanent_address", event.target.value)} className={`${inputClass} min-h-24`} placeholder="Resident address" />
                 </Field>
@@ -939,18 +978,31 @@ export default function ResidentsPage() {
                 <Field label="Company / University">
                   <input value={form.company_university} onChange={(event) => updateField("company_university", event.target.value)} className={inputClass} placeholder="Company or university" />
                 </Field>
+                </div>
+              </section>
+              <section className="space-y-4">
+                <h3 className="text-lg font-semibold text-slate-900">Documents / Photo</h3>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field label="Resident Identity Document Type"><select value={form.resident_identity_type} onChange={e => updateField("resident_identity_type", e.target.value)} className={inputClass}><option value="">Not specified (CNIC requirements)</option><option>CNIC</option><option>Passport</option></select></Field>
+                  <Field label="Guardian Identity Document Type"><select value={form.guardian_identity_type} onChange={e => updateField("guardian_identity_type", e.target.value)} className={inputClass}><option value="">Not specified (CNIC requirements)</option><option>CNIC</option><option>Passport</option></select></Field>
+                </div>
+                {editingId ? <ProfileDocuments key={editingId} onBusyChange={setDocumentsUploading} residentId={editingId} residentType={form.resident_identity_type || "CNIC"} guardianType={form.guardian_identity_type || "CNIC"} slots={["resident_back", "guardian_front", "guardian_back"]} /> : <p className="text-sm text-slate-500">After saving the resident, use Edit to upload additional private identity documents.</p>}
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <Field label="Photo Upload">
                   <div className="space-y-2">
-                    <input type="file" accept="image/*" onChange={handlePhotoUpload} className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100" />
+                    <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhotoUpload} className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100" />
                     {photoFileName ? <p className="text-xs text-slate-500">Selected: {photoFileName}</p> : null}
                   </div>
                 </Field>
                 <Field label="ID Card Upload">
                   <div className="space-y-2">
-                    <input type="file" accept="image/*" onChange={handleIdCardUpload} className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100" />
+                    <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handleIdCardUpload} className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-full file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-indigo-700 hover:file:bg-indigo-100" />
                     {idCardFileName ? <p className="text-xs text-slate-500">Selected: {idCardFileName}</p> : null}
                   </div>
                 </Field>
+                </div>
+              </section>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <Field label="Status">
                   <select value={form.status} onChange={(event) => updateField("status", event.target.value as ResidentStatus)} className={inputClass}>
                     <option value="Active" disabled>Active (managed by Admissions)</option>
@@ -965,7 +1017,7 @@ export default function ResidentsPage() {
 
               <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:justify-end">
                 <button type="button" onClick={closeForm} className="rounded-xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700">Cancel</button>
-                <button type="submit" disabled={saving} className="rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white disabled:opacity-60">
+                <button type="submit" disabled={saving || documentsUploading} className="rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white disabled:opacity-60">
                   {saving ? "Saving..." : editingId ? "Update Resident" : "Save Resident"}
                 </button>
               </div>
@@ -1181,8 +1233,7 @@ export default function ResidentsPage() {
 
                 {profileTab === "Documents" && (
                   <div className="grid gap-4 md:grid-cols-2">
-                    <InfoCard label="Photo" value={text(profile.resident.photo_url || "No photo uploaded")} />
-                    <InfoCard label="ID Card" value={text(profile.resident.id_card_url || "No ID card uploaded")} />
+                    <ProfileDocuments residentId={profile.resident.id} residentType={profile.resident.resident_identity_type || "CNIC"} guardianType={profile.resident.guardian_identity_type || "CNIC"} readOnly />
                   </div>
                 )}
 
