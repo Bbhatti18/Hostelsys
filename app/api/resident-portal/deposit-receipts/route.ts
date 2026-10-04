@@ -123,6 +123,7 @@ export async function POST(request: NextRequest) {
     if (paidError) return jsonError("The deposit balance could not be checked.", 500);
     const outstanding = Math.round((Number(depositBill.total_amount) - (paid ?? []).reduce((sum, row) => sum + Number(row.amount), 0)) * 100) / 100;
     if (submittedAmount > outstanding) return jsonError("Amount exceeds this admission's outstanding deposit.", 409);
+    if (submittedAmount < outstanding) return jsonError("Use Pay an Obligation / Payment Commitments for a partial deposit and acknowledge the remainder.",409);
     const { data: existingReceipt, error: existingError } = await supabaseAdmin.from("payment_receipts")
       .select("id").eq("bill_id", depositBill.id).eq("status", "Pending Verification").limit(1).maybeSingle();
     if (existingError || existingReceipt) return jsonError("A deposit proof is already pending or could not be checked.", 409);

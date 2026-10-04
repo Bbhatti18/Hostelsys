@@ -1,4 +1,5 @@
 "use client";
+import PaymentFollowups from "@/components/payments/PaymentFollowups";
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -175,6 +176,7 @@ export default function DashboardPage() {
                 ))}
               </div>
 
+              <PaymentFollowups staff tasks />
               {showRentDueToday && (
                 <section id="rent-due-today-panel" aria-labelledby="rent-due-today-heading" aria-busy={loading}
                   className="mt-6 rounded-2xl bg-white p-4 shadow-lg sm:p-6 dark:bg-slate-800">

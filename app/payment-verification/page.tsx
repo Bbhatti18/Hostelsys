@@ -1,4 +1,5 @@
 "use client";
+import HistoricalEvidence from "@/components/payments/HistoricalEvidence";
 
 import {
   useCallback,
@@ -125,6 +126,7 @@ export default function PaymentVerificationPage() {
   const [residents, setResidents] = useState<GenericRow[]>([]);
   const [payments, setPayments] = useState<GenericRow[]>([]);
   const [allocations, setAllocations] = useState<PaymentAllocation[]>([]);
+  const [followupBills,setFollowupBills]=useState<Array<{bill_id:string;purpose:string;original:number;remaining:number;followups:Array<{receipt_id:string;due_date:string;note:string;amount:number}>}>>([]);
   const [bills, setBills] = useState<GenericRow[]>([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -143,6 +145,7 @@ export default function PaymentVerificationPage() {
       billsResult,
       paymentsResult,
       allocationsResult,
+      followupsResult,
     ] = await Promise.all([
       supabase
         .from("payment_receipts")
@@ -152,12 +155,13 @@ export default function PaymentVerificationPage() {
       supabase.from("bills").select("*"),
       supabase.from("payments").select("id,bill_id,amount,payment_status"),
       supabase.from("payment_allocations").select("payment_id,bill_id,amount"),
+      supabase.rpc("payment_followup_data"),
     ]);
 
     const firstError =
       receiptsResult.error ||
       residentsResult.error ||
-      billsResult.error || paymentsResult.error || allocationsResult.error;
+      billsResult.error || paymentsResult.error || allocationsResult.error || followupsResult.error;
 
     if (firstError) {
       setError(getSupabaseErrorMessage(firstError, "Payment receipts could not be loaded."));
@@ -167,6 +171,7 @@ export default function PaymentVerificationPage() {
       setBills((billsResult.data ?? []) as GenericRow[]);
       setPayments(paymentsResult.data ?? []);
       setAllocations((allocationsResult.data ?? []) as PaymentAllocation[]);
+      setFollowupBills(followupsResult.data || []);
     }
 
     setLoading(false);
@@ -311,6 +316,7 @@ export default function PaymentVerificationPage() {
           </p>
         </section>
 
+        <HistoricalEvidence staff />
         <PaymentsNavigation active="verification" />
 
         {(message || error) && (
@@ -487,6 +493,11 @@ export default function PaymentVerificationPage() {
 
                         <td className="max-w-xs px-5 py-4 text-sm text-slate-700">
                           {receiptNotes(receipt)}
+                          {followupBills.filter(b=>receipt.bill_id===b.bill_id || paymentAllocationRows.some(a=>a.bill_id===b.bill_id)).map(b=><div key={b.bill_id} className="mt-2 rounded border p-2">
+                            <p>{b.purpose} original obligation: {money(b.original)}</p>
+                            <p>Submitted to this obligation: {money(paymentAllocationRows.find(a=>a.bill_id===b.bill_id)?.amount ?? (receipt.bill_id===b.bill_id ? receipt.amount : 0))} · {receipt.status==="Pending Verification" ? "Remaining after verification" : "Current remaining"}: {money(Math.max(Number(b.remaining)-(receipt.status==="Pending Verification" ? Number(paymentAllocationRows.find(a=>a.bill_id===b.bill_id)?.amount ?? (receipt.bill_id===b.bill_id ? receipt.amount : 0)) : 0),0))}</p>
+                            {b.followups.filter(f=>f.receipt_id===receipt.id).map((f,i)=><p key={i}>Resident commitment: {money(f.amount)} by {f.due_date} · {f.note}</p>)}
+                          </div>)}
                           {extra && <div className="mt-3 min-w-56 space-y-2 rounded-lg border p-3">
                             {paymentAllocationRows.map(item => <p key={item.bill_id}>{bills.find(b => b.id === item.bill_id)?.bill_type === "Other Charges" ? "Additional Charges" : String(bills.find(b => b.id === item.bill_id)?.bill_type || "Bill")}: {money(item.amount)}</p>)}
                             <p>Declared Additional Charges: {money(extra.amount)} + {extra.category}</p>

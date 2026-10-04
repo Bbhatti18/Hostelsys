@@ -1,4 +1,6 @@
 "use client";
+import PaymentFollowups from "@/components/payments/PaymentFollowups";
+import HistoricalEvidence from "@/components/payments/HistoricalEvidence";
 
 import { ADDITIONAL_CATEGORIES, additionalChargeError, additionalPaymentTotal } from "@/lib/additionalCharges";
 import Link from "next/link";
@@ -397,6 +399,10 @@ entries.push({
       return;
     }
 
+    if (!withAdditional && selectedBillId !== "combined" && submittedAmount < canonicalAmount) {
+      setError("For a partial payment, use Pay an Obligation / Payment Commitments above and acknowledge the remainder.");
+      setUploading(false); return;
+    }
     const resolved = await resolveAuthenticatedResident();
     if (!resolved.resident) {
       setError(resolved.error ?? "Your resident profile could not be verified.");
@@ -666,6 +672,8 @@ entries.push({
 
         {(message || error) && <section className={`rounded-2xl border px-4 py-3 text-sm font-medium ${error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>{error || message}</section>}
 
+        <PaymentFollowups onSubmitted={loadData} />
+        <HistoricalEvidence />
         <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
           {[['Rent Due', money(financial.monthlyRentDue)], ['Total Payable (Rent + Security Deposit)', money(combined.total)], ['Account Outstanding (all charges)', money(summary.outstanding)], ['Security Deposit Due', money(depositOutstanding)], ['Current Pending Bills', String(summary.pendingBills)], ['Overdue Bills', String(summary.overdueBills)], ['Verified Payments', money(summary.verifiedPayments)], ['Pending Verification', String(summary.pendingReceipts)]].map(([label, value]) => <article key={label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"><p className="text-sm text-slate-500">{label}</p><p className="mt-2 text-xl font-bold sm:text-2xl">{value}</p></article>)}
         </section>

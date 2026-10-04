@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
 
     const { data: resident, error: residentError } = await supabaseAdmin.from("residents").select("id,status").eq("email", normalizeIdentityEmail(email)).maybeSingle();
     if (residentError || !resident || String(resident.status).toLowerCase() === "archived") return errorResponse("Your resident profile could not be verified.", 403);
+    if (authData.user?.user_metadata?.resident_id && authData.user.user_metadata.resident_id !== resident.id) return errorResponse("Resident identity mismatch.", 403);
 
     const formData = await request.formData();
     const admissionId = String(formData.get("admissionId") ?? "");
@@ -49,6 +50,10 @@ export async function POST(request: NextRequest) {
     const includeLateFee = formData.get("includeLateFee") === "true";
     const includeRent = formData.get("includeRent") !== "false";
     const hasAdditional = formData.has("additionalAmount");
+    const historical = formData.get("historical") === "true";
+    const isPartial = formData.has("obligationItems");
+    if (historical && (isPartial || hasAdditional || includeLateFee)) return errorResponse("Historical evidence cannot allocate to current obligations.",400);
+    if (isPartial && (hasAdditional || includeLateFee)) return errorResponse("Submit new Additional Charges or Late Fees through their existing workflow.", 400);
     const additionalAmount = String(formData.get("additionalAmount") ?? "");
     const additionalCategory = String(formData.get("additionalCategory") ?? "");
     const additionalDescription = String(formData.get("additionalDescription") ?? "").trim();
@@ -63,13 +68,14 @@ export async function POST(request: NextRequest) {
     const referenceNumber = String(formData.get("referenceNumber") ?? "").trim().slice(0, 120);
     const notes = String(formData.get("notes") ?? "").trim().slice(0, 2000);
     const file = formData.get("file");
-    if (!admissionId || (hasAdditional ? (!rentBillId && !depositBillId) : (!rentBillId || (!includeLateFee && !depositBillId))) || !Number.isFinite(amount) || amount <= 0 || !paymentMethod || !(file instanceof File)) return errorResponse("Current obligations, amount, payment method, and receipt file are required.", 400);
+    if ((!historical && !admissionId) || (!historical && !isPartial && !hasAdditional && (!rentBillId || (!includeLateFee && !depositBillId))) || !Number.isFinite(amount) || amount <= 0 || !paymentMethod || !(file instanceof File)) return errorResponse("Current obligations, amount, payment method, and receipt file are required.", 400);
+    if (!/^\d+(\.\d{1,2})?$/.test(String(formData.get("amount") || ""))) return errorResponse("Amount must have at most two decimals.",400);
     if (includeLateFee && depositBillId && !includeRent) return errorResponse("A deposit plus fine payment must include rent.", 400);
     if (!SAFE_FILE_TYPES.has(file.type) || file.size <= 0 || file.size > MAX_FILE_SIZE) return errorResponse("Receipt files must be PDF, JPEG, or PNG and no larger than 5 MB.", 400);
     const buffer = await file.arrayBuffer();
     if (!hasExpectedSignature(new Uint8Array(buffer).slice(0, 8), file.type)) return errorResponse("The receipt file content does not match its declared file type.", 400);
 
-    if (referenceNumber) {
+    if (referenceNumber && !historical) {
       const [payments, receipts] = await Promise.all([
         supabaseAdmin.from("payments").select("id").eq("resident_id", resident.id).eq("reference_number", referenceNumber).limit(1),
         supabaseAdmin.from("payment_receipts").select("id").eq("resident_id", resident.id).eq("reference_number", referenceNumber).limit(1),
@@ -78,13 +84,40 @@ export async function POST(request: NextRequest) {
       if ((payments.data ?? []).length || (receipts.data ?? []).length) return errorResponse("This reference number has already been submitted.", 409);
     }
 
-    uploadedPath = `${resident.id}/combined/${admissionId}/${crypto.randomUUID()}-${safeFileName(file.name)}`;
+    uploadedPath = historical
+      ? `${resident.id}/historical/${crypto.randomUUID()}-${safeFileName(file.name)}`
+      : `${resident.id}/combined/${admissionId}/${crypto.randomUUID()}-${safeFileName(file.name)}`;
     const { error: uploadError } = await supabaseAdmin.storage.from("payment-receipts").upload(uploadedPath, buffer, { contentType: file.type, cacheControl: "3600", upsert: false });
     if (uploadError) return errorResponse("The receipt file could not be uploaded. Please try again.", 500);
+    if (historical) {
+      const { error } = await supabaseAdmin.from("historical_payment_evidence").insert({
+        resident_id:resident.id, purpose:String(formData.get("historicalPurpose") || ""),
+        payment_date:String(formData.get("historicalDate") || ""), amount, payment_method:paymentMethod,
+        reference_number:referenceNumber || null, description:notes, receipt_path:uploadedPath,
+      });
+      if(error) { await supabaseAdmin.storage.from("payment-receipts").remove([uploadedPath]); return errorResponse(error.message,409); }
+      return NextResponse.json({message:"Historical evidence submitted. It does not pay any current bill or increase collections."},{headers:{"Cache-Control":"private, no-store"}});
+    }
     const purpose = hasAdditional ? [rentBillId ? "Rent" : "", depositBillId ? "Security Deposit" : "", "Additional Charges"].filter(Boolean).join(" + ") : includeLateFee
       ? [includeRent ? "Rent" : "", depositBillId ? "Security Deposit" : "", "Late Fee"].filter(Boolean).join(" + ")
       : "Rent + Security Deposit";
     const receiptNotes = [`Payment method: ${paymentMethod}`, `Payment purpose: ${purpose}`, `Admission ID: ${admissionId}`, notes].filter(Boolean).join("\n");
+    if (isPartial) {
+      const { data, error } = await supabaseAdmin.rpc("submit_partial_obligations", {
+        p_resident_id: resident.id, p_admission_id: admissionId,
+        p_items: JSON.parse(String(formData.get("obligationItems"))),
+        p_due: String(formData.get("commitmentDate") || "") || null,
+        p_reason: String(formData.get("commitmentReason") || "").trim().slice(0, 2000),
+        p_ack: formData.get("acknowledged") === "true", p_payment_method: paymentMethod,
+        p_reference_number: referenceNumber, p_notes: [`Payment method: ${paymentMethod}`, `Admission ID: ${admissionId}`, notes].filter(Boolean).join("\n"),
+        p_receipt_url: uploadedPath, p_original_file_name: file.name.slice(0,255),
+      });
+      if (error || !data) {
+        await supabaseAdmin.storage.from("payment-receipts").remove([uploadedPath]);
+        return errorResponse(error?.message || "Submission failed.", 409);
+      }
+      return NextResponse.json({ message: "Payment pending staff verification; commitment has no financial effect.", ...data }, { headers: { "Cache-Control": "private, no-store" } });
+    }
     const { data, error } = await supabaseAdmin.rpc(hasAdditional ? "create_additional_payment_submission" : includeLateFee ? "create_late_fee_payment_submission" : "create_combined_payment_submission", {
       p_resident_id: resident.id,
       p_admission_id: admissionId,

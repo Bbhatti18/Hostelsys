@@ -33,7 +33,10 @@ for(const name of ['verify_single_payment_receipt','reject_single_payment_receip
   assert.ok(route.includes(`rpc("${name}"`));
 }
 assert.doesNotMatch(route,/reservedBill|claimedReceipt|paymentPayload|\.update\(\{\s*paid_amount:/);
-assert.equal(fs.readdirSync(dir).filter(f=>f.endsWith('.sql')).sort().at(-1),'20260822210000_atomic_finance_and_exact_identity.sql');
+const migrations=fs.readdirSync(dir).filter(f=>f.endsWith('.sql')).sort();
+const atomicIndex=migrations.indexOf('20260822210000_atomic_finance_and_exact_identity.sql');
+assert.ok(atomicIndex>migrations.indexOf('20260822160000_combined_payment_allocations.sql'));
+assert.ok(migrations.indexOf('20261004120000_payment_followups.sql')>atomicIndex);
 
 // Simultaneous callers must serialize validation with write, never only a preflight.
 async function model() {

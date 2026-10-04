@@ -1,4 +1,5 @@
 "use client";
+import PaymentFollowups from "@/components/payments/PaymentFollowups";
 
 import {
   FormEvent,
@@ -606,6 +607,7 @@ export default function PaymentsPage() {
           </button>
         </section>
 
+        <PaymentFollowups staff />
         <PaymentsNavigation active="payments" />
 
         {(message || error) && (

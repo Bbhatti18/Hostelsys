@@ -38,6 +38,7 @@ const loginPath = "/login";
 // so they must not be redirected to /login when cookies are absent.
 const selfAuthenticatedApiPaths = new Set([
   residentPortalDataPath,
+  "/api/payment-evidence",
   "/api/resident-portal/profile",
   "/api/resident-portal/profile/documents",
   "/api/billing/bulk-generate",
