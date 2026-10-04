@@ -460,6 +460,12 @@ export default function PaymentVerificationPage() {
                         <td className="px-5 py-4 text-sm text-slate-700">
                           {paymentAllocationRows.length > 1
                             ? allocationBills.map((item) => firstText(item, ["bill_number"])).filter(Boolean).join(" + ")
+                            : firstText(bill, ["admission_id"]) || securityDepositAdmissionId(receipt.notes) || "—"}
+                        </td>
+
+                        <td className="px-5 py-4 text-sm text-slate-700">
+                          {paymentAllocationRows.length > 1
+                            ? [...new Set(allocationBills.map((item) => firstText(item, ["billing_month"])).filter(Boolean))].join(" + ") || "—"
                             : firstText(bill, ["billing_month"]) || "—"}
                         </td>
 
