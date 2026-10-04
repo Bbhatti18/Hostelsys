@@ -6,7 +6,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 let ts;
 try { ts = require("typescript"); } catch { ts = require("../.local-checks/typescript/package/lib/typescript.js"); }
-const allowed = new Set(["residentFinancialSummary", "financialMath", "billApproval", "residentPaymentHistory", "paymentReceiptPurpose", "paymentObligations", "paymentAllocations", "canonical", "contractWorkflow", "noticeVisibility"]);
+const allowed = new Set(["staffPaymentLabel", "residentFinancialSummary", "financialMath", "billApproval", "residentPaymentHistory", "paymentReceiptPurpose", "paymentObligations", "paymentAllocations", "canonical", "contractWorkflow", "noticeVisibility"]);
 const cache = new Map();
 function load(name) {
   name = name.replace(/^.*\//, "").replace(/\.ts$/, "");
@@ -171,4 +171,27 @@ const frozenBills = Object.freeze([]), frozenPayments = Object.freeze([]);
 assert.equal(state(frozenAdmission, frozenBills, frozenPayments), 'not_required');
 assert.equal(frozenPayments.length,0); assert.equal(frozenAdmission.deposit_status,'Held');
 console.log('PASS deposit state/readiness: intentional zero, unpaid, nonverified, partial/full verified, allocation precedence, old/different admission isolation, missing data, contract guards, and no mutations.');
+}
+
+// Staff payment descriptions resolve real allocation links, without crediting money.
+{
+  const { staffPaymentLabel } = load('staffPaymentLabel');
+  const bills = ['Rent','Security Deposit','Other Charges'].map((bill_type,i)=>({id:String(i),resident_id:'resident',bill_type,bill_number:'BILL-'+i}));
+  const payment = {id:'payment',resident_id:'resident',bill_id:null,amount:16001,payment_status:'Pending'};
+  const allocation = i => ({payment_id:'payment',bill_id:String(i),amount:i===2?1:16000});
+  for(const [ids,expected] of [[[0],'Rent'],[[1],'Security Deposit'],[[2],'Additional Charges'],[[0,1],'Rent + Security Deposit'],[[1,2],'Security Deposit + Additional Charges'],[[0,2],'Rent + Additional Charges'],[[0,1,2],'Rent + Security Deposit + Additional Charges']]) {
+    assert.equal(staffPaymentLabel(payment,ids.map(allocation),bills),expected);
+  }
+  const combined=[allocation(1),allocation(2)];
+  const before=JSON.stringify({payment,combined,bills});
+  assert.equal(staffPaymentLabel(payment,combined,bills),'Security Deposit + Additional Charges','Pending 16001 payment describes its 16000 + 1 allocated bills');
+  assert.equal(JSON.stringify({payment,combined,bills}),before,'Display never mutates financial rows');
+  assert.equal(staffPaymentLabel({...payment,bill_id:'0'},combined,bills),'Security Deposit + Additional Charges','Allocations take precedence');
+  assert.equal(staffPaymentLabel({...payment,bill_id:'0'},[],bills),'BILL-0','Legacy reference preserved');
+  assert.equal(staffPaymentLabel(payment,[allocation(1),allocation(1)],bills),'Security Deposit','Duplicate rows do not duplicate labels');
+  assert.equal(staffPaymentLabel(payment,[],bills),'Unknown bill');
+  assert.equal(staffPaymentLabel(payment,[{...allocation(1),bill_id:'missing'}],bills),'Unknown bill');
+  assert.equal(staffPaymentLabel(payment,[{...allocation(1),payment_id:'other'}],bills),'Unknown bill');
+  assert.equal(staffPaymentLabel(payment,combined,bills.map(b=>({...b,resident_id:'other'}))),'Unknown bill');
+  console.log('PASS staff allocation-aware payment labels, pending Additional Charges example, legacy fallback, deduplication and association isolation.');
 }

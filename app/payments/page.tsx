@@ -16,6 +16,7 @@ import {
   roundMoney,
 } from "@/lib/financials";
 import { getSupabaseErrorMessage } from "@/lib/supabaseErrors";
+import { staffPaymentLabel, type StaffPaymentAllocation } from "@/lib/staffPaymentLabel";
 
 type GenericRow = Record<string, unknown>;
 
@@ -124,6 +125,7 @@ export default function PaymentsPage() {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [residents, setResidents] = useState<GenericRow[]>([]);
   const [bills, setBills] = useState<GenericRow[]>([]);
+  const [allocations, setAllocations] = useState<StaffPaymentAllocation[]>([]);
   const [form, setForm] = useState<PaymentForm>(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -139,7 +141,7 @@ export default function PaymentsPage() {
     setLoading(true);
     setError("");
 
-    const [paymentsResult, residentsResult, billsResult] = await Promise.all([
+    const [paymentsResult, residentsResult, billsResult, allocationsResult] = await Promise.all([
       supabase
         .from("payments")
         .select("*")
@@ -149,20 +151,23 @@ export default function PaymentsPage() {
         .from("bills")
         .select("*")
         .order("created_at", { ascending: false }),
+      supabase.from("payment_allocations").select("payment_id,bill_id,amount"),
     ]);
 
     const firstError =
-      paymentsResult.error || residentsResult.error || billsResult.error;
+      paymentsResult.error || residentsResult.error || billsResult.error || allocationsResult.error;
 
     if (firstError) {
       setError(getSupabaseErrorMessage(firstError, "Financial records could not be loaded."));
       setPayments([]);
       setResidents([]);
       setBills([]);
+      setAllocations([]);
     } else {
       setPayments((paymentsResult.data ?? []) as Payment[]);
       setResidents((residentsResult.data ?? []) as GenericRow[]);
       setBills((billsResult.data ?? []) as GenericRow[]);
+      setAllocations((allocationsResult.data ?? []) as StaffPaymentAllocation[]);
     }
 
     setLoading(false);
@@ -920,8 +925,7 @@ export default function PaymentsPage() {
                         </p>
 
                         <p className="mt-1 text-xs text-slate-500">
-                          {(payment.bill_id && billMap.get(payment.bill_id)?.billNumber) ??
-                            "Unknown bill"}
+                          {staffPaymentLabel(payment, allocations, bills)}
                         </p>
                       </td>
 
