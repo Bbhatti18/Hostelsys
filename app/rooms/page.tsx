@@ -258,6 +258,15 @@ export default function RoomsPage() {
   }, []);
 
   useEffect(() => {
+    const reload = () => { void loadRooms(); };
+    const changed = (event: StorageEvent) => { if (event.key === "admission-allocation-changed") reload(); };
+    window.addEventListener("focus", reload);
+    window.addEventListener("admission-allocation-changed", reload);
+    window.addEventListener("storage", changed);
+    return () => { window.removeEventListener("focus", reload); window.removeEventListener("admission-allocation-changed", reload); window.removeEventListener("storage", changed); };
+  }, [loadRooms]);
+
+  useEffect(() => {
     // Loading remote Supabase data is the external synchronization for this effect.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadRooms();
