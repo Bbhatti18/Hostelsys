@@ -607,8 +607,8 @@ export default function PaymentsPage() {
           </button>
         </section>
 
-        <PaymentFollowups staff />
         <PaymentsNavigation active="payments" />
+        <PaymentFollowups staff />
 
         {(message || error) && (
           <section

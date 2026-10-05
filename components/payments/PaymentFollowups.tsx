@@ -64,6 +64,34 @@ export default function PaymentFollowups({ staff = false, tasks = false, onSubmi
     if(result.error)setError(result.error.message); else { setMessage("Payment request recorded. No bill or payment was created."); setReplace(""); await load(); }
     setBusy(false);
   }
+  // Staff Payments uses a contained request panel; resident and Dashboard views stay unchanged.
+  if (staff && !tasks) return <details className="my-4 rounded-xl border bg-white text-slate-900">
+    <summary className="cursor-pointer px-4 py-3 font-semibold text-indigo-700">Request Payment</summary>
+    <div className="max-w-2xl space-y-3 border-t p-4">
+      {error && <p role="alert" className="text-red-700">{error}</p>}
+      {message && <p role="status">{message}</p>}
+      <fieldset disabled={busy} className="space-y-3">
+        <label className="block">Resident / obligation<select className={input} value={requestBill} onChange={e=>{setRequestBill(e.target.value);setReplace("");setRequestAmount(String(rows.find(r=>r.bill_id===e.target.value)?.remaining || ""));}}>
+          <option value="">Select resident and obligation</option>
+          {rows.filter(r=>Number(r.remaining)>0).map(r=><option key={r.bill_id} value={r.bill_id}>{r.resident} / {r.purpose} / {r.billing_month}</option>)}
+        </select></label>
+        {request && <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-3 text-sm sm:grid-cols-4">
+          <p>Original: {money(request.original)}</p><p>Paid: {money(request.verified)}</p><p>Pending: {money(request.pending)}</p><p>Remaining: {money(request.remaining)}</p>
+        </div>}
+        <label className="block">Requested amount<input className={input} type="number" min="0.01" step="0.01" max={request?.remaining} value={requestAmount} onChange={e=>setRequestAmount(e.target.value)}/></label>
+        <label className="block">Due date<input className={input} type="date" value={date} onChange={e=>setDate(e.target.value)}/></label>
+        <label className="block">Notes<textarea className={input} rows={3} value={reason} onChange={e=>setReason(e.target.value)}/></label>
+        {!!request?.pending_receipts.length && <label className="block">Pending receipt / replacement<select className={input} value={replace} onChange={e=>setReplace(e.target.value)}>
+          <option value="">Keep pending proof; send follow-up only</option>
+          {request.pending_receipts.map((r,i)=><option key={r.id} value={r.id}>Reject / replace pending receipt {i+1} / full receipt {money(r.amount)}</option>)}
+        </select><span className="text-xs text-slate-600">Replacement rejects the selected receipt and all its allocations; proof and history are retained.</span></label>}
+        {!!request?.followups.length && <details className="rounded-lg border p-3 text-sm"><summary className="cursor-pointer font-medium">Existing requests and commitments</summary>
+          {request.followups.map(f=><div key={f.id} className="mt-2 break-words border-t pt-2"><p>{f.kind==='request'?'Payment Requested':'Payment Commitment'} / {f.status} / {money(f.amount)} / {f.due_date}</p><p className="whitespace-pre-wrap">{f.note}</p>{f.receipt_status && <p>Receipt: {f.receipt_status}</p>}</div>)}
+        </details>}
+        <button className="rounded bg-indigo-600 px-4 py-2 text-white disabled:opacity-50" disabled={!request} type="button" onClick={()=>void requestPayment()}>{busy?'Working...':'Request Payment'}</button>
+      </fieldset>
+    </div>
+  </details>;
   const visible = tasks ? rows.filter(r => Number(r.remaining)>0 && r.followups.some(f => ["Due Today","Overdue"].includes(f.status))) : rows;
   return <section className="my-6 space-y-4 rounded-2xl border bg-white p-5 text-slate-900">
     <h2 className="text-xl font-bold">{tasks ? "Payment Follow-ups Due Today / Overdue" : staff ? "Request Payment / Re-send Due" : "Pay an Obligation / Payment Commitments"}</h2>

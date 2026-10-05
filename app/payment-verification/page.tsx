@@ -126,7 +126,7 @@ export default function PaymentVerificationPage() {
   const [residents, setResidents] = useState<GenericRow[]>([]);
   const [payments, setPayments] = useState<GenericRow[]>([]);
   const [allocations, setAllocations] = useState<PaymentAllocation[]>([]);
-  const [followupBills,setFollowupBills]=useState<Array<{bill_id:string;purpose:string;original:number;remaining:number;followups:Array<{receipt_id:string;due_date:string;note:string;amount:number}>}>>([]);
+  const [followupBills,setFollowupBills]=useState<Array<{bill_id:string;purpose:string;original:number;verified:number;remaining:number;followups:Array<{receipt_id:string;due_date:string;note:string;amount:number}>}>>([]);
   const [bills, setBills] = useState<GenericRow[]>([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -316,7 +316,7 @@ export default function PaymentVerificationPage() {
           </p>
         </section>
 
-        <HistoricalEvidence staff />
+        <details className="rounded-xl border bg-white"><summary className="cursor-pointer px-4 py-3 font-semibold text-slate-700">Historical Payment Evidence (Non-ledger)</summary><HistoricalEvidence staff /></details>
         <PaymentsNavigation active="verification" />
 
         {(message || error) && (
@@ -378,13 +378,10 @@ export default function PaymentVerificationPage() {
                   {[
                     "Resident",
                     "Payment For",
-                    "Admission / Allocation",
                     "Billing Month",
                     "Amount",
                     "Method",
-                    "Reference",
                     "Submitted",
-                    "Notes",
                     "Receipt",
                     "Status",
                     "Actions",
@@ -403,7 +400,7 @@ export default function PaymentVerificationPage() {
                 {loading ? (
                   <tr>
                     <td
-                      colSpan={12}
+                      colSpan={9}
                       className="px-5 py-12 text-center text-sm text-slate-500"
                     >
                       Loading receipts...
@@ -412,7 +409,7 @@ export default function PaymentVerificationPage() {
                 ) : filteredReceipts.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={12}
+                      colSpan={9}
                       className="px-5 py-12 text-center text-sm text-slate-500"
                     >
                       No payment receipts found.
@@ -443,9 +440,9 @@ export default function PaymentVerificationPage() {
                     return (
                       <tr
                         key={receipt.id}
-                        className="hover:bg-slate-50/70"
+                        className="align-top hover:bg-slate-50/70"
                       >
-                        <td className="px-5 py-4">
+                        <td className="px-3 py-3">
                           <p className="font-semibold text-slate-900">
                             {residentName(resident)}
                           </p>
@@ -455,46 +452,23 @@ export default function PaymentVerificationPage() {
                           </p>
                         </td>
 
-                        <td className="px-5 py-4 text-sm text-slate-700">
-                          {paymentAllocationRows.length > 1
-                            ? allocationBills.map(item => item?.bill_type === "Other Charges" && extra ? "Additional Charges" : String(item?.bill_type || "Bill payment")).join(" + ")
-                            : !receipt.bill_id && isSecurityDepositReceipt(receipt.notes)
-                            ? "Security Deposit"
-                            : firstText(bill, ["bill_number"]) || "No bill"}
-                        </td>
+                        <td className="px-3 py-3 text-sm text-slate-700">
+                          <p className="font-medium">{paymentAllocationRows.length
+                            ? [...new Set(allocationBills.map(item=>item?.bill_type==='Other Charges'?'Additional Charges':String(item?.bill_type || 'Bill payment')))].join(' + ')
+                            : !receipt.bill_id && isSecurityDepositReceipt(receipt.notes) ? 'Security Deposit' : firstText(bill,['bill_type']) || 'Bill payment'}</p>
+                          {paymentAllocationRows.length>1 && <div className="mt-1 text-xs text-slate-500">{paymentAllocationRows.map(a=><p key={a.bill_id}>{bills.find(b=>b.id===a.bill_id)?.bill_type==='Other Charges'?'Additional Charges':String(bills.find(b=>b.id===a.bill_id)?.bill_type || 'Bill')}: {money(a.amount)}</p>)}</div>}
+                          <p className="mt-1 line-clamp-1 max-w-56 break-words text-xs text-slate-500">{receiptNotes(receipt)}</p>
+                          <details className="mt-2 max-w-md">
+                            <summary className="cursor-pointer text-xs font-semibold text-indigo-700">View Details{extra && receipt.status==='Pending Verification' ? ' / Classify Additional Charges' : ''}</summary>
+                            <div className="mt-2 max-h-96 space-y-2 overflow-y-auto break-words rounded-lg border bg-white p-3 text-sm">
+                              <p>Reference: {receipt.reference_number || '\u2014'}</p>
+                              <p className="break-all">Admission: {firstText(bill,['admission_id']) || firstText(allocationBills[0],['admission_id']) || securityDepositAdmissionId(receipt.notes) || '\u2014'}</p>
+                              {paymentAllocationRows.map(a=><p className="break-all" key={a.bill_id}>Bill: {a.bill_id} / {money(a.amount)}</p>)}
 
-                        <td className="px-5 py-4 text-sm text-slate-700">
-                          {paymentAllocationRows.length > 1
-                            ? allocationBills.map((item) => firstText(item, ["bill_number"])).filter(Boolean).join(" + ")
-                            : firstText(bill, ["admission_id"]) || securityDepositAdmissionId(receipt.notes) || "—"}
-                        </td>
-
-                        <td className="px-5 py-4 text-sm text-slate-700">
-                          {paymentAllocationRows.length > 1
-                            ? [...new Set(allocationBills.map((item) => firstText(item, ["billing_month"])).filter(Boolean))].join(" + ") || "—"
-                            : firstText(bill, ["billing_month"]) || "—"}
-                        </td>
-
-                        <td className="px-5 py-4 text-sm font-semibold text-slate-900">
-                          {money(receipt.amount)}
-                        </td>
-
-                        <td className="px-5 py-4 text-sm text-slate-700">
-                          {receiptPaymentMethod(receipt.notes)}
-                        </td>
-
-                        <td className="px-5 py-4 text-sm text-slate-700">
-                          {receipt.reference_number || "—"}
-                        </td>
-
-                        <td className="px-5 py-4 text-sm text-slate-700">
-                          {new Date(receipt.created_at).toLocaleString("en-PK")}
-                        </td>
-
-                        <td className="max-w-xs px-5 py-4 text-sm text-slate-700">
-                          {receiptNotes(receipt)}
+                          <p className="whitespace-pre-wrap break-words">{receiptNotes(receipt) || "No notes"}</p>
                           {followupBills.filter(b=>receipt.bill_id===b.bill_id || paymentAllocationRows.some(a=>a.bill_id===b.bill_id)).map(b=><div key={b.bill_id} className="mt-2 rounded border p-2">
                             <p>{b.purpose} original obligation: {money(b.original)}</p>
+                            <p>Verified excluding this receipt: {money(Math.max(Number(b.verified)-(receipt.status==="Verified" ? Number(paymentAllocationRows.find(a=>a.bill_id===b.bill_id)?.amount ?? (receipt.bill_id===b.bill_id ? receipt.amount : 0)) : 0),0))}</p>
                             <p>Submitted to this obligation: {money(paymentAllocationRows.find(a=>a.bill_id===b.bill_id)?.amount ?? (receipt.bill_id===b.bill_id ? receipt.amount : 0))} · {receipt.status==="Pending Verification" ? "Remaining after verification" : "Current remaining"}: {money(Math.max(Number(b.remaining)-(receipt.status==="Pending Verification" ? Number(paymentAllocationRows.find(a=>a.bill_id===b.bill_id)?.amount ?? (receipt.bill_id===b.bill_id ? receipt.amount : 0)) : 0),0))}</p>
                             {b.followups.filter(f=>f.receipt_id===receipt.id).map((f,i)=><p key={i}>Resident commitment: {money(f.amount)} by {f.due_date} · {f.note}</p>)}
                           </div>)}
@@ -511,9 +485,30 @@ export default function PaymentVerificationPage() {
                               <label className="flex gap-2"><input type="checkbox" checked={confirmation.confirmed} onChange={e => editConfirmation({ confirmed: e.target.checked })} />I checked the receipt total and confirm this classification.</label>
                             </>}
                           </div>}
+
+                            </div>
+                          </details>
                         </td>
 
-                        <td className="px-5 py-4">
+                        <td className="px-3 py-3 text-sm text-slate-700">
+                          {paymentAllocationRows.length > 0
+                            ? [...new Set(allocationBills.map((item) => firstText(item, ["billing_month"])).filter(Boolean))].join(" + ") || "—"
+                            : firstText(bill, ["billing_month"]) || "—"}
+                        </td>
+
+                        <td className="px-3 py-3 text-sm font-semibold text-slate-900">
+                          {money(receipt.amount)}
+                        </td>
+
+                        <td className="px-3 py-3 text-sm text-slate-700">
+                          {receiptPaymentMethod(receipt.notes)}
+                        </td>
+
+                        <td className="px-3 py-3 text-sm text-slate-700">
+                          {new Date(receipt.created_at).toLocaleString("en-PK")}
+                        </td>
+
+                        <td className="px-3 py-3">
                           <button
                             type="button"
                             onClick={async () => {
@@ -537,7 +532,7 @@ export default function PaymentVerificationPage() {
                           </button>
                         </td>
 
-                        <td className="px-5 py-4">
+                        <td className="px-3 py-3">
                           <span
                             className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${statusClass(
                               receipt.status
@@ -547,7 +542,7 @@ export default function PaymentVerificationPage() {
                           </span>
                         </td>
 
-                        <td className="px-5 py-4">
+                        <td className="px-3 py-3">
                           <div className="flex flex-wrap gap-2">
                             {receipt.status === "Pending Verification" && <button
                               type="button"
