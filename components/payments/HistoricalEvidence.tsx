@@ -15,11 +15,11 @@ export default function HistoricalEvidence({staff=false}:{staff?:boolean}) {
    const note=window.prompt(`${status} historical evidence only. This will NOT pay current bills. Enter review note:`);if(!note?.trim())return;
    setBusy(true);try{await request("",{id:row.id,status,note});await load();}catch(e){setError(e instanceof Error?e.message:"Review failed.");}finally{setBusy(false);}
  }
- return <section className="my-6 space-y-3 rounded-xl border bg-white p-5 text-slate-900"><h2 className="text-xl font-bold">Historical Payment Evidence — Not Collections</h2>
-   <p>Accepted historical receipts do not settle current Rent, Deposit, Additional Charges or Late Fees.</p>{error && <p role="alert">{error}</p>}
-   {rows.map(r=><article key={r.id} className="space-y-2 rounded border p-3"><strong>{staff?`${r.residents?.full_name} — `:""}{r.purpose} — {r.status === "Verified" ? "Evidence Accepted (Non-ledger)" : r.status}</strong>
+ return <section className="my-6 space-y-3 rounded-xl border bg-white p-5 text-slate-900"><h2 className="text-xl font-bold">{staff ? 'Historical Payment Evidence \u2014 Not Collections' : 'Previous Payment Receipts'}</h2>
+   <p>{staff ? 'Accepted historical receipts do not settle current Rent, Deposit, Additional Charges or Late Fees.' : 'Review the receipts you submitted for earlier payments.'}</p>{error && <p role="alert">{error}</p>}
+   {rows.map(r=><article key={r.id} className="space-y-2 rounded border p-3"><strong>{staff?`${r.residents?.full_name} — `:""}{r.purpose} — {r.status === "Verified" ? (staff ? "Evidence Accepted (Non-ledger)" : "Receipt Accepted") : r.status}</strong>
      <p>{r.payment_date} · Rs {Number(r.amount).toLocaleString("en-PK")} · {r.payment_method} · {r.reference_number || "No reference"}</p><p>{r.description}</p><p>{r.review_note}</p>
-     <p>Historical payment date: {r.payment_date}. Submitted to HMS: {new Date(r.created_at).toLocaleString("en-PK",{timeZone:"Asia/Karachi"})} (Asia/Karachi).</p>
+     <p>{staff?'Historical payment date:':'Payment date:'} {r.payment_date}. {staff?'Submitted to HMS:':'Submitted:'} {new Date(r.created_at).toLocaleString("en-PK",{timeZone:"Asia/Karachi"})} (Asia/Karachi).</p>
      <button type="button" className="mr-3 underline" onClick={()=>void (async()=>{try{const data=await request(`?id=${encodeURIComponent(r.id)}`);window.open(data.url,"_blank","noopener,noreferrer");}catch(e){setError(e instanceof Error?e.message:"Receipt unavailable.");}})()}>Open Receipt</button>
      {staff && r.status==="Pending" && <><button disabled={busy} type="button" className="mr-3 underline" onClick={()=>void review(r,"Verified")}>Accept Historical Evidence</button><button disabled={busy} type="button" className="underline" onClick={()=>void review(r,"Rejected")}>Reject Evidence</button></>}
    </article>)}

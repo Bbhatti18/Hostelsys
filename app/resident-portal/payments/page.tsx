@@ -400,7 +400,7 @@ entries.push({
     }
 
     if (!withAdditional && selectedBillId !== "combined" && submittedAmount < canonicalAmount) {
-      setError("For a partial payment, use Pay an Obligation / Payment Commitments above and acknowledge the remainder.");
+      setError("For a partial payment, choose Rent or Security Deposit in Make a Payment and acknowledge the remaining balance.");
       setUploading(false); return;
     }
     const resolved = await resolveAuthenticatedResident();
@@ -672,39 +672,37 @@ entries.push({
 
         {(message || error) && <section className={`rounded-2xl border px-4 py-3 text-sm font-medium ${error ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>{error || message}</section>}
 
-        <PaymentFollowups onSubmitted={loadData} />
-        <HistoricalEvidence />
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
-          {[['Rent Due', money(financial.monthlyRentDue)], ['Total Payable (Rent + Security Deposit)', money(combined.total)], ['Account Outstanding (all charges)', money(summary.outstanding)], ['Security Deposit Due', money(depositOutstanding)], ['Current Pending Bills', String(summary.pendingBills)], ['Overdue Bills', String(summary.overdueBills)], ['Verified Payments', money(summary.verifiedPayments)], ['Pending Verification', String(summary.pendingReceipts)]].map(([label, value]) => <article key={label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"><p className="text-sm text-slate-500">{label}</p><p className="mt-2 text-xl font-bold sm:text-2xl">{value}</p></article>)}
-        </section>
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-          <h2 className="text-xl font-bold">Upload Payment Receipt</h2>
-          <p className="mt-1 text-sm text-slate-500">PDF, JPEG, or PNG; maximum 5 MB. Submission remains pending until verified.</p>
-          {selectedBillId === "combined" && <p className="mt-4 text-sm text-amber-800">Rent: {money(financial.monthlyRentDue)}. Security Deposit: {money(depositOutstanding)}. Submit one receipt for the exact combined amount; it will remain pending until admin verification.</p>}
-          {!regularBills.length && financial.monthlyRentDue > 0 && <p className="mt-4 text-sm">Rent is due. Contact management to issue your rent bill before submitting payment.</p>}
+        <PaymentFollowups onSubmitted={loadData} onSelectAdditional={()=>setWithAdditional(true)} additionalPaymentForm={
           <form onSubmit={uploadReceipt} className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
-            <label className="min-w-0"><span className="mb-2 block text-sm font-semibold">Payment For *</span><select required value={selectedBillId} onChange={(event) => selectBill(event.target.value)} disabled={loading || uploading} className={inputClass}><option value="">Select an outstanding obligation</option>{financial.monthlyRentDue > 0 && !regularBills.some(bill => isPayableBill(bill.bill_status)) && <option disabled>Rent — {money(financial.monthlyRentDue)} due (awaiting bill)</option>}{depositOutstanding > 0 && <option value={depositBill ? depositBill.id : SECURITY_DEPOSIT_OPTION} disabled={pendingDepositReceipt || !depositBill}>{depositBill ? `Security Deposit (${depositBill.bill_number})` : "Security Deposit"} — {money(depositOutstanding)}{pendingDepositReceipt ? " — Pending Verification" : ""}</option>}{regularBills.filter((bill) => isPayableBill(bill.bill_status) && bill.outstanding > 0).map((bill) => <option key={bill.id} value={bill.id}>{bill.bill_number} — {monthLabel(bill.billing_month)} — {money(bill.outstanding)}</option>)}{financial.monthlyRentDue > 0 && depositOutstanding > 0 && <option value="combined">Rent + Security Deposit — {money(combined.total)} total due</option>}</select></label>
+            <label className="min-w-0"><span className="mb-2 block text-sm font-semibold">Payment For *</span><select required value={selectedBillId} onChange={(event) => { selectBill(event.target.value); setWithAdditional(true); }} disabled={loading || uploading} className={inputClass}><option value="">Select Rent or Security Deposit</option>{financial.monthlyRentDue > 0 && !regularBills.some(bill => isPayableBill(bill.bill_status)) && <option disabled>Rent — {money(financial.monthlyRentDue)} due (awaiting bill)</option>}{depositOutstanding > 0 && <option value={depositBill ? depositBill.id : SECURITY_DEPOSIT_OPTION} disabled={pendingDepositReceipt || !depositBill}>{depositBill ? `Security Deposit (${depositBill.bill_number})` : "Security Deposit"} — {money(depositOutstanding)}{pendingDepositReceipt ? " — Pending Verification" : ""}</option>}{regularBills.filter((bill) => isPayableBill(bill.bill_status) && bill.outstanding > 0).map((bill) => <option key={bill.id} value={bill.id}>{bill.bill_number} — {monthLabel(bill.billing_month)} — {money(bill.outstanding)}</option>)}{financial.monthlyRentDue > 0 && depositOutstanding > 0 && <option value="combined">Rent + Security Deposit — {money(combined.total)} total due</option>}</select></label>
             <label className="min-w-0"><span className="mb-2 block text-sm font-semibold">Amount *</span><input required type="number" min="0.01" step="0.01" max={selectedBillId === SECURITY_DEPOSIT_OPTION || selectedBillId === depositBill?.id ? depositOutstanding : selectedObligation?.amount} value={withAdditional ? canonicalAmount : amount} onChange={(event) => setAmount(event.target.value)} readOnly={withAdditional || selectedBillId === "combined"} disabled={uploading || (!selectedBill && selectedBillId !== SECURITY_DEPOSIT_OPTION && selectedBillId !== "combined")} className={inputClass} /></label>
             <label className="min-w-0"><span className="mb-2 block text-sm font-semibold">Payment Method *</span><input required value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} disabled={uploading} className={inputClass} placeholder="Cash deposit, bank transfer, card, etc." /></label>
             <label className="min-w-0"><span className="mb-2 block text-sm font-semibold">Reference Number</span><input value={referenceNumber} onChange={(event) => setReferenceNumber(event.target.value)} disabled={uploading} className={inputClass} placeholder="Transaction reference" /></label>
-            <label className="min-w-0 md:col-span-2"><span className="mb-2 block text-sm font-semibold">Receipt File *</span><input id="payment-receipt-file" required type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" onChange={handleFileChange} disabled={uploading} className={inputClass} /></label>
+            <label className="min-w-0 md:col-span-2"><span className="mb-2 block text-sm font-semibold">Upload Payment Receipt *</span><input id="payment-receipt-file" required type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" onChange={handleFileChange} disabled={uploading} className={inputClass} /></label>
             <label className="min-w-0 md:col-span-2"><span className="mb-2 block text-sm font-semibold">Notes</span><textarea value={notes} onChange={(event) => setNotes(event.target.value)} disabled={uploading} className={`${inputClass} min-h-24`} /></label>
             {(selectedBillId === "combined" || selectedObligation?.purpose === "Rent" || selectedObligation?.purpose === "Security Deposit") && <div className="space-y-3 rounded-xl border border-slate-200 p-4 md:col-span-2">
-              <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={withAdditional} disabled={uploading} onChange={event => setWithAdditional(event.target.checked)} />I paid additional charges with this payment</label>
+              <p className="text-sm font-semibold">Other charges included in this payment</p>
               {withAdditional && <>
                 <p className="text-sm">{selectedBillId === "combined" ? `Rent: ${money(financial.monthlyRentDue)} + Security Deposit: ${money(depositOutstanding)}` : `${selectedObligation?.purpose}: ${money(canonicalAmount)}`}</p>
                 <label className="block text-sm">Additional Charges Amount (PKR)<input required type="number" min="0.01" step="0.01" value={additionalAmount} onChange={e => setAdditionalAmount(e.target.value)} disabled={uploading} className={inputClass} /></label>
                 <label className="block text-sm">Additional Charges For<select value={additionalCategory} onChange={e => setAdditionalCategory(e.target.value)} disabled={uploading} className={inputClass}>{ADDITIONAL_CATEGORIES.map(category => <option key={category}>{category}</option>)}</select></label>
                 <label className="block text-sm">Description{additionalCategory === "Other" ? " (required)" : " (optional)"}<input maxLength={500} required={additionalCategory === "Other"} value={additionalDescription} onChange={e => setAdditionalDescription(e.target.value)} disabled={uploading} className={inputClass} /></label>
                 <p className="font-semibold">Total Amount Paid: {money(actualTotal)}</p>
-                <p className="text-xs text-slate-500">Additional charges are a declaration pending staff confirmation. Late Fee payments remain separate.</p>
+                <p className="text-xs text-slate-500">We will review the receipt and confirm these charges. Pay late fees separately through My Bills.</p>
               </>}
             </div>}
-            <p className="break-words text-sm md:col-span-2">Purpose: {selectedBillId === "combined" ? "Rent + Security Deposit" : selectedBillId === depositBill?.id ? "Security Deposit" : selectedBill ? selectedObligation?.purpose : "Not selected"} — Amount: {money(amount)} — Method: {paymentMethod || "Not selected"} — Reference: {referenceNumber || "None"} — Proof: {selectedFile?.name || "Not selected"}</p>
+            <p className="text-xs text-slate-500 md:col-span-2">PDF, JPEG or PNG / maximum 5 MB. Uploading your receipt is required.</p>
             <div className="md:col-span-2"><button type="submit" disabled={uploading || loading || !selectedBill && selectedBillId !== "combined" && selectedBillId !== SECURITY_DEPOSIT_OPTION} className="w-full rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:w-auto">{uploading ? "Submitting..." : "Submit for Verification"}</button></div>
           </form>
+        } />
+        <details className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><summary className="cursor-pointer font-semibold text-slate-900">Previous Payment Receipts</summary><HistoricalEvidence /></details>
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-4 text-lg font-bold text-slate-900">Your Payment Summary</h2>
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">{[['Rent Due',money(financial.monthlyRentDue)],['Security Deposit Due',money(depositOutstanding)],['Total Payable',money(combined.total)],['Pending Verification',String(summary.pendingReceipts)]].map(([label,value])=><div key={label}><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-xl font-bold text-slate-900">{value}</p></div>)}</div>
+          <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 border-t pt-3 text-sm text-slate-500"><span>Verified Payments: {money(summary.verifiedPayments)}</span><span>All charges outstanding: {money(summary.outstanding)}</span></div>
         </section>
+
+
 
         <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
           <h2 className="text-xl font-bold text-slate-900">Security Deposit</h2>
@@ -738,7 +736,7 @@ entries.push({
                         {isPayableBill(dep.bill_status) && dep.outstanding > 0 && (
                           <button
                             type="button"
-                            onClick={() => selectBill(dep.id)}
+                            onClick={() => window.dispatchEvent(new CustomEvent('select-payment-obligation',{detail:dep.id}))}
                             className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-700"
                           >
                             Select for Payment
@@ -785,5 +783,5 @@ function Status({ value }: { value: string }) {
 }
 
 function HistoryTable({ title, headers, rows, loading, empty }: { title: string; headers: string[]; rows: React.ReactNode[][]; loading: boolean; empty: string }) {
-  return <section className="rounded-3xl border border-slate-200 bg-white shadow-sm"><div className="border-b border-slate-200 p-5"><h2 className="text-xl font-bold">{title}</h2></div><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-200"><thead className="bg-slate-50"><tr>{headers.map((header) => <th key={header} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">{header}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{loading ? <tr><td colSpan={headers.length} className="px-5 py-10 text-center text-sm text-slate-500">Loading...</td></tr> : rows.length === 0 ? <tr><td colSpan={headers.length} className="px-5 py-10 text-center text-sm text-slate-500">{empty}</td></tr> : rows.map((row, index) => <tr key={`${title}-${index}`}>{row.map((cell, cellIndex) => <td key={`${title}-${index}-${cellIndex}`} className="px-4 py-4 text-sm text-slate-700">{cell}</td>)}</tr>)}</tbody></table></div></section>;
+  return <details className="rounded-3xl border border-slate-200 bg-white shadow-sm"><summary className="cursor-pointer p-5 text-lg font-bold text-slate-900">{title}</summary><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-200"><thead className="bg-slate-50"><tr>{headers.map((header) => <th key={header} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">{header}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{loading ? <tr><td colSpan={headers.length} className="px-5 py-10 text-center text-sm text-slate-500">Loading...</td></tr> : rows.length === 0 ? <tr><td colSpan={headers.length} className="px-5 py-10 text-center text-sm text-slate-500">{empty}</td></tr> : rows.map((row, index) => <tr key={`${title}-${index}`}>{row.map((cell, cellIndex) => <td key={`${title}-${index}-${cellIndex}`} className="px-4 py-4 text-sm text-slate-700">{cell}</td>)}</tr>)}</tbody></table></div></details>;
 }
