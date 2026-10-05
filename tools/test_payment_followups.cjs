@@ -195,5 +195,46 @@ function loadPure(name){name=name.replace(/^.*\//,'').replace(/\.ts$/,'');assert
  await operatorClaims();await assert.rejects(replacement(scoped.dep,oldProof.id),/does not belong/);
  assert.equal(await proofStatus(oldProof.id),'Pending Verification');
  console.log('PASS replacement authorization, bidirectional cross-obligation, NULL/ambiguous legacy, allocation/legacy selector parity, canonical precedence, cross-resident/admission, preserved proof/history and zero new money/bills');
+
+ // Pending reserves capacity, never financial credit. Followups cover only unreserved remainder.
+ await serviceClaims();
+ const pendingCase=await fixture(10000);
+ const initialPending=await partial(pendingCase,[item(pendingCase.rent,17000),item(pendingCase.dep,7000)]);
+ assert.equal(Number((await one('select effective_bill_paid($1) n',[pendingCase.dep])).n),0);
+ assert.equal(Number((await one('select pending_bill_submissions($1) n',[pendingCase.dep])).n),7000);
+ await assert.rejects(partial(pendingCase,[item(pendingCase.dep,3001)],null,false),/available balance/);
+ await assert.rejects(partial(pendingCase,[item(pendingCase.dep,2000)],null,false),/commitment/);
+ const small=await partial(pendingCase,[item(pendingCase.dep,2000)]);
+ assert.equal(Number((await one('select amount from payment_followups where receipt_id=$1',[small.receipt_id])).amount),1000);
+ await db.query('select reject_single_payment_receipt($1,$2,$3)',[small.receipt_id,'verifier@local.invalid','Correction']);
+ assert.equal(Number((await one('select pending_bill_submissions($1) n',[pendingCase.dep])).n),7000);
+ const fill=await partial(pendingCase,[item(pendingCase.dep,3000)],null,false);
+ assert.equal(Number((await one('select count(*) n from payment_followups where receipt_id=$1',[fill.receipt_id])).n),0);
+ assert.equal(Number((await one('select effective_bill_paid($1) n',[pendingCase.dep])).n),0);
+ assert.equal(Number((await one('select balance_amount from bills where id=$1',[pendingCase.dep])).balance_amount),10000);
+ await assert.rejects(partial(pendingCase,[item(pendingCase.dep,1)],null,false),/available balance/);
+ await db.query('select cancel_payment_with_allocations($1,$2,$3)',[fill.payment_id,'verifier@local.invalid','Correction']);
+ assert.equal(Number((await one('select pending_bill_submissions($1) n',[pendingCase.dep])).n),7000);
+ const finalFill=await partial(pendingCase,[item(pendingCase.dep,3000)],null,false);
+ await db.query('select verify_single_payment_receipt($1,$2)',[finalFill.receipt_id,'verifier@local.invalid']);
+ await db.query('select verify_payment_with_allocations($1,$2,$3)',[initialPending.payment_id,initialPending.receipt_id,'verifier@local.invalid']);
+ assert.equal(Number((await one('select effective_bill_paid($1) n',[pendingCase.dep])).n),10000);
+ assert.equal(Number((await one('select count(*) n from bills where admission_id=$1',[pendingCase.a])).n),2);
+ // Fill both independently reserved balances; no artificial commitment is needed.
+ const both=await fixture(10000);
+ const bothFirst=await partial(both,[item(both.rent,5000),item(both.dep,7000)]);
+ const bothLast=await partial(both,[item(both.rent,12000),item(both.dep,3000)],null,false);
+ assert.equal(Number((await one('select count(*) n from payment_followups where receipt_id=$1',[bothLast.receipt_id])).n),0);
+ await assert.rejects(db.query('update payment_receipts set available_balance_submission=false where id=$1',[bothLast.receipt_id]),/immutable/);
+ await db.query('select verify_payment_with_allocations($1,$2,$3)',[bothLast.payment_id,bothLast.receipt_id,'verifier@local.invalid']);
+ assert.equal(Number((await one('select effective_bill_paid($1) n',[both.dep])).n),3000);
+ await db.query('select verify_payment_with_allocations($1,$2,$3)',[bothFirst.payment_id,bothFirst.receipt_id,'verifier@local.invalid']);
+ assert.equal(Number((await one('select effective_bill_paid($1) n',[both.dep])).n),10000);
+ assert.equal(Number((await one('select effective_bill_paid($1) n',[both.rent])).n),17000);
+ const provenance=await fixture();
+ await operatorClaims();
+ await assert.rejects(db.query("insert into payment_receipts(resident_id,bill_id,amount,receipt_url,available_balance_submission) values($1,$2,17000,$3,true)",[provenance.r,provenance.rent,provenance.r+'/forged.pdf']),/server-only/);
+ await serviceClaims();
+ console.log('PASS pending-aware commitments: 10k outstanding, 7k pending, 3k capacity, 2k commits 1k, 3k no commitment, over-cap denied, rejection/cancellation restore capacity, independent combined settlement in either order, server-only immutable provenance');
  console.log('PASS partial 27k/7k, same bills, no duplicate pending/overpayment, commitments/requests zero effect, replacement rejection, canonical settlement, due-today and resolved follow-ups, historical isolation, Other Charges classification');
 }finally{await db.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

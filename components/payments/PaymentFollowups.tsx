@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { roundMoney } from "@/lib/financialMath";
+import { paymentSubmissionPreview } from "@/lib/paymentSubmissionPreview";
 
 type Followup = { id: string; receipt_id: string | null; kind: string; amount: number; due_date: string; note: string; status: string; receipt_status: string | null };
 type Obligation = { bill_id: string; admission_id: string; resident: string; purpose: string; billing_month: string;
@@ -24,6 +25,7 @@ export default function PaymentFollowups({ staff = false, tasks = false, onSubmi
   const [replace, setReplace] = useState("");
   const [against,setAgainst]=useState("current"), [historyPurpose,setHistoryPurpose]=useState("Previous Rent"), [historyDate,setHistoryDate]=useState("");
   const [evidenceAmount,setEvidenceAmount]=useState("");
+  const [formVersion,setFormVersion]=useState(0);
   const load = useCallback(async () => {
     const result = await supabase.rpc("payment_followup_data");
     if (result.error) { setError(result.error.message); setRows([]); return; }
@@ -33,7 +35,8 @@ export default function PaymentFollowups({ staff = false, tasks = false, onSubmi
     window.addEventListener("focus",load); return () => { clearInterval(timer); window.removeEventListener("focus",load); };
   }, [load]);
   const selected = rows.filter(r => Number(amounts[r.bill_id]) > 0);
-  const partial = selected.some(r => Number(amounts[r.bill_id]) < Number(r.remaining));
+  const preview = (r:Obligation) => paymentSubmissionPreview(Number(r.remaining),Number(r.pending),Number(amounts[r.bill_id]));
+  const partial = selected.some(r => preview(r).requiresCommitment);
   const total = roundMoney(selected.reduce((sum,r) => sum + Number(amounts[r.bill_id]),0));
   const request = rows.find(r => r.bill_id === requestBill);
   const payable = rows.filter(r=>Number(r.remaining)>0);
@@ -76,7 +79,10 @@ export default function PaymentFollowups({ staff = false, tasks = false, onSubmi
       body.set("commitmentDate",date); body.set("commitmentReason",reason); body.set("acknowledged",String(ack)); body.set("file",file);
       const response = await fetch("/api/resident-portal/combined-payment",{method:"POST",headers:{Authorization:`Bearer ${data.session.access_token}`},body});
       const result=await response.json(); if(!response.ok)throw new Error(result.error);
-      setMessage(result.message); setAmounts({}); setAck(false); await load(); await onSubmitted?.();
+      setMessage(against==='historical'?'Your previous payment receipt has been submitted for review.':'Your receipt has been submitted for verification.');
+      setResidentPurpose('');setAgainst('current');setAmounts({});setMethod('');setReference('');setFile(null);
+      setReason('');setDate('');setAck(false);setHistoryPurpose('Previous Rent');setHistoryDate('');setEvidenceAmount('');
+      setFormVersion(version=>version+1);await load();await onSubmitted?.();
       window.dispatchEvent(new Event("payment-workflow-changed"));
     } catch(e) { setError(e instanceof Error ? e.message : "Submission failed."); } finally { setBusy(false); }
   }
@@ -89,12 +95,12 @@ export default function PaymentFollowups({ staff = false, tasks = false, onSubmi
   }
   if (!staff && !tasks) {
     const chosen=rows.filter(r=>Object.prototype.hasOwnProperty.call(amounts,r.bill_id));
-    const remainder=roundMoney(selected.reduce((sum,r)=>sum+Math.max(Number(r.remaining)-Number(amounts[r.bill_id]),0),0));
+    const remainder=roundMoney(selected.reduce((sum,r)=>sum+preview(r).projectedAvailableRemainder,0));
     return <div className="space-y-5">
       <section id="make-payment" className="scroll-mt-6 rounded-3xl border border-indigo-100 bg-white p-5 shadow-sm sm:p-7">
         <div className="mb-6"><p className="text-xs font-semibold uppercase tracking-widest text-indigo-600">Payments &amp; Receipts</p><h2 className="mt-2 text-2xl font-bold text-slate-900">Make a Payment</h2><p className="mt-2 text-sm text-slate-500">Select what you&apos;re paying for and upload your payment receipt.</p></div>
         {error && <p role="alert" className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-        {message && <p role="status" className="mb-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700">{residentPurpose==='historical'?'Your previous payment receipt has been submitted for review.':'Your receipt has been submitted for verification.'}</p>}
+        {message && <p role="status" className="mb-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700">{message}</p>}
         <label className="block text-sm font-semibold text-slate-700">What are you paying for?<select className={input+' mt-2 rounded-xl py-3'} value={residentPurpose} disabled={busy} onChange={e=>choosePurpose(e.target.value)}>
           <option value="">Select a payment</option>
           {!!rents.length && <option value="rent">Rent</option>}{!!deposits.length && <option value="deposit">Security Deposit</option>}
@@ -103,19 +109,19 @@ export default function PaymentFollowups({ staff = false, tasks = false, onSubmi
           {payable.filter(r=>!['Rent','Security Deposit'].includes(r.purpose)).map(r=><option value={'bill:'+r.bill_id} key={r.bill_id}>{r.purpose} / {month(r.billing_month)}</option>)}
           {additionalPaymentForm && <option value="additional">Rent / Deposit + Other Charges</option>}
         </select></label>
-        {residentPurpose==='additional' ? additionalPaymentForm : residentPurpose && <form className="mt-5 space-y-5" onSubmit={e=>{e.preventDefault();void submit();}}>
+        {residentPurpose==='additional' ? additionalPaymentForm : residentPurpose && <form key={formVersion} className="mt-5 space-y-5" onSubmit={e=>{e.preventDefault();void submit();}}>
           <fieldset disabled={busy} className="space-y-5">
             {against==='current' && <>
               {(residentPurpose==='rent'||residentPurpose==='combined') && rents.length>1 && <label className="block text-sm">Rent month<select className={input+' mt-2'} value={chosen.find(r=>r.purpose==='Rent')?.bill_id||''} onChange={e=>choosePurpose(residentPurpose,e.target.value)}>{rents.map(r=><option key={r.bill_id} value={r.bill_id}>{month(r.billing_month)}</option>)}</select></label>}
-              <div className="grid gap-3 sm:grid-cols-2">{chosen.map(r=><div key={r.bill_id} className="min-w-0 rounded-2xl bg-indigo-50/60 p-4"><h3 className="font-semibold text-slate-900">{r.purpose}{r.purpose==='Rent'?' / '+month(r.billing_month):''}</h3><p className="mt-1 text-sm text-slate-600">Amount due: <strong>{money(r.remaining)}</strong></p>{Number(r.pending)>0 && <p className="mt-1 text-xs text-amber-800">{money(r.pending)} awaiting review.</p>}
+              <div className="grid gap-3 sm:grid-cols-2">{chosen.map(r=><div key={r.bill_id} className="min-w-0 rounded-2xl bg-indigo-50/60 p-4"><h3 className="font-semibold text-slate-900">{r.purpose}{r.purpose==='Rent'?' / '+month(r.billing_month):''}</h3><p className="mt-1 text-sm text-slate-600">{Number(r.pending)>0?'Financial balance:':'Amount due:'} <strong>{money(r.remaining)}</strong></p>{Number(r.pending)>0 && <div className="mt-1 space-y-1 text-xs text-amber-800"><p>Awaiting verification: {money(r.pending)}</p><p>Available to pay now: {money(preview(r).available)}</p><p>Your financial balance changes only after verification.</p><p>Amount still available to pay after this submission: {money(preview(r).projectedAvailableRemainder)}</p></div>}
                 {Number(r.available)>0 ? <label className="mt-4 block text-sm font-medium">Amount you are paying<input required className={input+' mt-2 rounded-xl bg-white py-3'} type="number" min="0.01" step="0.01" max={r.available} value={amounts[r.bill_id]||''} onChange={e=>setAmounts(a=>({...a,[r.bill_id]:e.target.value}))}/></label>:<p className="mt-3 text-sm">Your receipt is awaiting review. No further payment is needed right now.</p>}
               </div>)}</div>
               <div className="flex justify-between gap-3 text-lg font-bold text-slate-900"><span>Total Payment</span><span>{money(total)}</span></div>
-              {partial && <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4"><h3 className="font-semibold text-amber-950">Remaining balance: {money(remainder)}</h3>
-                {selected.filter(r=>Number(amounts[r.bill_id])<Number(r.remaining)).map(r=><p key={r.bill_id} className="text-sm">{r.purpose}: {money(Number(r.remaining)-Number(amounts[r.bill_id]))} remaining</p>)}
+              {partial && <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4"><h3 className="font-semibold text-amber-950">Amount still available to pay after this submission: {money(remainder)}</h3>
+                {selected.filter(r=>preview(r).requiresCommitment).map(r=><p key={r.bill_id} className="text-sm">{r.purpose}: {money(preview(r).projectedAvailableRemainder)} remaining</p>)}
                 <label className="block text-sm font-medium">When will you pay the remaining amount?<input required type="date" className={input+' mt-2 bg-white'} value={date} onChange={e=>setDate(e.target.value)}/></label>
                 <label className="block text-sm font-medium">Reason / note<textarea required rows={2} className={input+' mt-2 bg-white'} value={reason} onChange={e=>setReason(e.target.value)}/></label>
-                <label className="flex items-start gap-2 text-sm"><input required type="checkbox" className="mt-1" checked={ack} onChange={e=>setAck(e.target.checked)}/>I understand that {money(remainder)} will remain due.</label>
+                <label className="flex items-start gap-2 text-sm"><input required type="checkbox" className="mt-1" checked={ack} onChange={e=>setAck(e.target.checked)}/>I understand that {money(remainder)} will still be available to pay.</label>
               </div>}
             </>}
             {against==='historical' && <><p className="text-sm text-slate-500">Use this option to submit a receipt for a payment made before your current portal payment record.</p><label className="block text-sm font-medium">Previous payment was for<select className={input+' mt-2'} value={historyPurpose} onChange={e=>setHistoryPurpose(e.target.value)}>{['Previous Rent','Previous Security Deposit','Previous Rent + Security Deposit','Other Charges'].map(p=><option key={p}>{p}</option>)}</select></label><label className="block text-sm font-medium">Payment Date<input required type="date" className={input+' mt-2'} value={historyDate} onChange={e=>setHistoryDate(e.target.value)}/></label></>}
