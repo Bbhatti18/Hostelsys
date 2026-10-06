@@ -482,8 +482,9 @@ export default function PaymentsPage() {
   }
 
   async function cancelPayment(payment: Payment) {
+    if (payment.payment_status === "Cancelled") return;
     const confirmed = window.confirm(
-      payment.payment_status === "Cancelled" ? "Reconcile this cancelled payment?s bill and deposit balance?" : `Cancel payment ${payment.payment_number ?? ""}? Its history will be preserved.`
+      `Cancel payment ${payment.payment_number ?? ""}? Its history will be preserved.`
     );
 
     if (!confirmed) return;
@@ -503,16 +504,7 @@ export default function PaymentsPage() {
       return;
     }
     if (currentPayment.payment_status === "Cancelled") {
-      if (!currentPayment.bill_id) {
-        setMessage("This combined payment is already cancelled.");
-        setCancellingId(null);
-        await refresh();
-        return;
-      }
-      try {
-        await refreshBillFinancials(currentPayment.bill_id);
-        setMessage("Cancelled payment balance reconciled. No payment was applied.");
-      } catch { setError("The balance could not be reconciled. Retry this action after resolving the error."); }
+      setMessage("This payment is already cancelled.");
       setCancellingId(null);
       await refresh();
       return;
@@ -965,7 +957,7 @@ export default function PaymentsPage() {
                             </button>
                           )}
 
-                          <button
+                          {payment.payment_status !== "Cancelled" && <button
                             type="button"
                             disabled={
                               cancellingId === payment.id
@@ -975,10 +967,8 @@ export default function PaymentsPage() {
                           >
                             {cancellingId === payment.id
                               ? "Cancelling..."
-                              : payment.payment_status === "Cancelled"
-                                ? "Reconcile balance"
-                                : "Cancel"}
-                          </button>
+                              : "Cancel"}
+                          </button>}
                         </div>
                       </td>
                     </tr>

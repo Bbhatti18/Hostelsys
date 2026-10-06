@@ -1,4 +1,5 @@
 "use client";
+import { receiptDisplayStatus } from "@/lib/receiptDisplayStatus";
 import HistoricalEvidence from "@/components/payments/HistoricalEvidence";
 
 import {
@@ -81,7 +82,8 @@ function money(value: unknown) {
   }).format(Number(value || 0));
 }
 
-function statusClass(status: ReceiptStatus) {
+function statusClass(status: ReceiptStatus | "Cancelled") {
+  if (status === "Cancelled") return "bg-slate-100 text-slate-700";
   if (status === "Verified") {
     return "bg-emerald-100 text-emerald-700";
   }
@@ -182,6 +184,8 @@ export default function PaymentVerificationPage() {
     return () => window.clearTimeout(timeoutId);
   }, [refresh]);
 
+  const displayStatus = useCallback((receipt: PaymentReceipt) => receiptDisplayStatus(receipt, payments), [payments]);
+
   const filteredReceipts = useMemo(() => {
     const query = search.trim().toLowerCase();
 
@@ -210,32 +214,34 @@ export default function PaymentVerificationPage() {
 
       const matchesStatus =
         statusFilter === "All" ||
-        receipt.status === statusFilter;
+        displayStatus(receipt) === statusFilter;
 
       return matchesSearch && matchesStatus;
     });
-  }, [bills, receipts, residents, search, statusFilter]);
+  }, [bills, receipts, residents, search, statusFilter, displayStatus]);
 
   const summary = useMemo(
     () => ({
       total: receipts.length,
+      cancelled: receipts.filter(item => displayStatus(item) === "Cancelled").length,
       pending: receipts.filter(
-        (item) => item.status === "Pending Verification"
+        (item) => displayStatus(item) === "Pending Verification"
       ).length,
       verified: receipts.filter(
-        (item) => item.status === "Verified"
+        (item) => displayStatus(item) === "Verified"
       ).length,
       rejected: receipts.filter(
-        (item) => item.status === "Rejected"
+        (item) => displayStatus(item) === "Rejected"
       ).length,
     }),
-    [receipts]
+    [receipts, displayStatus]
   );
 
   async function updateReceiptStatus(
     receipt: PaymentReceipt,
     nextStatus: "Verified" | "Rejected"
   ) {
+    if (displayStatus(receipt) !== "Pending Verification") return;
     const rejectionReason =
       nextStatus === "Rejected"
         ? window.prompt("Enter the reason for rejecting this receipt:")?.trim()
@@ -331,11 +337,12 @@ export default function PaymentVerificationPage() {
           </section>
         )}
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
           <StatCard label="Total Receipts" value={String(summary.total)} />
           <StatCard label="Pending" value={String(summary.pending)} />
           <StatCard label="Verified" value={String(summary.verified)} />
           <StatCard label="Rejected" value={String(summary.rejected)} />
+          <StatCard label="Cancelled" value={String(summary.cancelled)} />
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -359,6 +366,7 @@ export default function PaymentVerificationPage() {
                 Pending Verification
               </option>
               <option value="Verified">Verified</option>
+              <option value="Cancelled">Cancelled</option>
               <option value="Rejected">Rejected</option>
             </select>
 
@@ -459,8 +467,10 @@ export default function PaymentVerificationPage() {
                           {paymentAllocationRows.length>1 && <div className="mt-1 text-xs text-slate-500">{paymentAllocationRows.map(a=><p key={a.bill_id}>{bills.find(b=>b.id===a.bill_id)?.bill_type==='Other Charges'?'Additional Charges':String(bills.find(b=>b.id===a.bill_id)?.bill_type || 'Bill')}: {money(a.amount)}</p>)}</div>}
                           <p className="mt-1 line-clamp-1 max-w-56 break-words text-xs text-slate-500">{receiptNotes(receipt)}</p>
                           <details className="mt-2 max-w-md">
-                            <summary className="cursor-pointer text-xs font-semibold text-indigo-700">View Details{extra && receipt.status==='Pending Verification' ? ' / Classify Additional Charges' : ''}</summary>
+                            <summary className="cursor-pointer text-xs font-semibold text-indigo-700">View Details{extra && displayStatus(receipt)==='Pending Verification' ? ' / Classify Additional Charges' : ''}</summary>
                             <div className="mt-2 max-h-96 space-y-2 overflow-y-auto break-words rounded-lg border bg-white p-3 text-sm">
+                              <p>Receipt Verification: {receipt.status}</p>
+                              {displayStatus(receipt) === "Cancelled" && <p>Payment Status: Cancelled. This payment is not credited.</p>}
                               <p>Reference: {receipt.reference_number || '\u2014'}</p>
                               <p className="break-all">Admission: {firstText(bill,['admission_id']) || firstText(allocationBills[0],['admission_id']) || securityDepositAdmissionId(receipt.notes) || '\u2014'}</p>
                               {paymentAllocationRows.map(a=><p className="break-all" key={a.bill_id}>Bill: {a.bill_id} / {money(a.amount)}</p>)}
@@ -469,9 +479,9 @@ export default function PaymentVerificationPage() {
                           {followupBills.filter(b=>receipt.bill_id===b.bill_id || paymentAllocationRows.some(a=>a.bill_id===b.bill_id)).map(b=><div key={b.bill_id} className="mt-2 rounded border p-2">
                             <h4 className="font-semibold text-slate-900">{b.purpose === 'Other Charges' ? 'Additional Charges' : b.purpose}{b.purpose === 'Rent' && firstText(bills.find(item=>text(item.id)===b.bill_id),['billing_month']) ? ' — '+new Date(firstText(bills.find(item=>text(item.id)===b.bill_id),['billing_month']).slice(0,7)+'-01T12:00:00Z').toLocaleDateString('en-GB',{month:'long',year:'numeric',timeZone:'UTC'}) : ''}</h4>
                             <p>{b.purpose === 'Security Deposit' ? 'Total Deposit' : b.purpose === 'Rent' ? 'Total Rent' : 'Total Bill'}: {money(b.original)}</p>
-                            <p>Previously Verified: {money(Math.max(Number(b.verified)-(receipt.status==="Verified" ? Number(paymentAllocationRows.find(a=>a.bill_id===b.bill_id)?.amount ?? (receipt.bill_id===b.bill_id ? receipt.amount : 0)) : 0),0))}</p>
+                            <p>Previously Verified: {money(Math.max(Number(b.verified)-(displayStatus(receipt)==="Verified" ? Number(paymentAllocationRows.find(a=>a.bill_id===b.bill_id)?.amount ?? (receipt.bill_id===b.bill_id ? receipt.amount : 0)) : 0),0))}</p>
                             <p>This Payment: {money(paymentAllocationRows.find(a=>a.bill_id===b.bill_id)?.amount ?? (receipt.bill_id===b.bill_id ? receipt.amount : 0))}</p>
-                            <p className="font-semibold">{receipt.status==="Pending Verification" ? "Balance After Verification" : "Remaining Balance"}: {money(Math.max(Number(b.remaining)-(receipt.status==="Pending Verification" ? Number(paymentAllocationRows.find(a=>a.bill_id===b.bill_id)?.amount ?? (receipt.bill_id===b.bill_id ? receipt.amount : 0)) : 0),0))}</p>
+                            <p className="font-semibold">{displayStatus(receipt)==="Pending Verification" ? "Balance After Verification" : "Remaining Balance"}: {money(Math.max(Number(b.remaining)-(displayStatus(receipt)==="Pending Verification" ? Number(paymentAllocationRows.find(a=>a.bill_id===b.bill_id)?.amount ?? (receipt.bill_id===b.bill_id ? receipt.amount : 0)) : 0),0))}</p>
                             {b.followups.filter(f=>f.receipt_id===receipt.id).map((f,i)=><div key={i} className="mt-2 border-t pt-2"><p>Payment Plan: {money(f.amount)} due by {new Date(f.due_date+'T12:00:00Z').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric',timeZone:'UTC'})}</p><p>Reason: {f.note}</p></div>)}
                           </div>)}
                           {extra && <div className="mt-3 min-w-56 space-y-2 rounded-lg border p-3">
@@ -480,7 +490,7 @@ export default function PaymentVerificationPage() {
                             <p>Description: {extra.description || "None"}</p>
                             <p className="font-semibold">Submitted Total: {money(receipt.amount)}</p>
                             {extra.confirmed && <p>Staff classification: {extra.confirmed.category} + {money(extra.confirmed.amount)} + {extra.confirmed.description}</p>}
-                            {receipt.status === "Pending Verification" && <>
+                            {displayStatus(receipt) === "Pending Verification" && <>
                               <label className="block">Confirm Additional Amount (PKR)<input type="number" min="0.01" step="0.01" value={confirmation.amount} onChange={e => editConfirmation({ amount: e.target.value, confirmed: false })} className={inputClass} /></label>
                               <label className="block">Confirm Category<select value={confirmation.category} onChange={e => editConfirmation({ category: e.target.value, confirmed: false })} className={inputClass}>{ADDITIONAL_CATEGORIES.map(category => <option key={category}>{category}</option>)}</select></label>
                               <label className="block">Description<input maxLength={500} value={confirmation.description} onChange={e => editConfirmation({ description: e.target.value, confirmed: false })} className={inputClass} /></label>
@@ -537,16 +547,16 @@ export default function PaymentVerificationPage() {
                         <td className="px-3 py-3">
                           <span
                             className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${statusClass(
-                              receipt.status
+                              displayStatus(receipt)
                             )}`}
                           >
-                            {receipt.status}
+                            {displayStatus(receipt)}
                           </span>
                         </td>
 
                         <td className="px-3 py-3">
                           <div className="flex flex-wrap gap-2">
-                            {receipt.status === "Pending Verification" && <button
+                            {displayStatus(receipt) === "Pending Verification" && <button
                               type="button"
                               disabled={updatingId === receipt.id}
                               onClick={() =>
@@ -560,7 +570,7 @@ export default function PaymentVerificationPage() {
                               Verify
                             </button>}
 
-                            {receipt.status === "Pending Verification" && <button
+                            {displayStatus(receipt) === "Pending Verification" && <button
                               type="button"
                               disabled={updatingId === receipt.id}
                               onClick={() =>
