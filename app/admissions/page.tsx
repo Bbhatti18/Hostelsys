@@ -912,7 +912,7 @@ export default function AdmissionsPage() {
                   </select>
                 </Field>
 
-                <p className="text-sm text-slate-600 md:col-span-2">Use Move Resident to change room, bed or allocation type.</p>
+                <p className="text-sm text-slate-600 md:col-span-2">Use Move / Change Allocation to change room, bed or allocation type, including sharing or exclusive use in the same room.</p>
                 <Field label="Admission Date *">
                   <input
                     required
@@ -1276,7 +1276,7 @@ const rent = getAdmissionRent(admission, depositBills, depositPayments);
                             </span>
                           ) : (
                             <div className="flex flex-wrap gap-2">
-                              <button type="button" className="rounded-lg border px-3 py-2 text-xs font-semibold text-indigo-700" onClick={() => setMoving(admission)}>Move Resident</button>
+                              <button type="button" className="rounded-lg border px-3 py-2 text-xs font-semibold text-indigo-700" onClick={() => setMoving(admission)}>Move / Change Allocation</button>
                               {admission.status === "Pending" &&
                                 contract &&
                                 ["Submitted", "Signed"].includes(

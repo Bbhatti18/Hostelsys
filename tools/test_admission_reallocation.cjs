@@ -40,6 +40,29 @@ function loadPure(name) {
   const component = fs.readFileSync('components/admissions/MoveResident.tsx', 'utf8');
   assert.ok(component.includes('if (busy || !canMove || !destination) return;'), 'Save rejects stale/invalid selections before RPC');
   assert.ok(component.includes('disabled={!canMove || busy}'), 'Confirmation uses the same valid destination predicate');
+  const { buildRoomOccupancy } = loadPure('roomOccupancy');
+  const shared = buildRoomOccupancy(room,beds,[single]);
+  const exclusive = buildRoomOccupancy(room,beds,[whole]);
+  assert.equal(shared.status,'Partially Occupied');assert.equal(shared.available,1);assert.equal(shared.blocked,0);
+  assert.equal(exclusive.status,'Exclusively Occupied');assert.equal(exclusive.available,0);assert.equal(exclusive.blocked,1);
+  // Exercise the real dialog's mode-change handler without network or effects.
+  const React=require('react');
+  function dialog(admission,neighbors=[]) {
+    let i=0;const changed={};const states={0:[{...room,room_number:'14'}],1:beds,2:[admission,...neighbors]};
+    const mod={exports:{}};
+    const deps={'react':{...React,useEffect(){},useState(initial){const key=i++;return [key in states?states[key]:initial,v=>{changed[key]=v;}];}},'react/jsx-runtime':require('react/jsx-runtime'),'@/lib/supabase':{supabase:{}},'@/lib/reallocationDestinations':{reallocationDestinations}};
+    const compiled=ts.transpileModule(component,{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
+    vm.runInNewContext('(function(require,module,exports){'+compiled+'})',{})(id=>{assert.ok(deps[id],id);return deps[id];},mod,mod.exports);
+    const tree=mod.exports.default({admission,residentName:'Resident',onClose(){},async onSaved(){}});
+    const selects=[];function walk(n){if(!n||typeof n!=='object')return;if(Array.isArray(n)){n.forEach(walk);return;}if(n.type==='select')selects.push(n);walk(n.props?.children);}walk(tree);
+    return {changed,select:selects[0]};
+  }
+  const toSharing=dialog(whole);assert.equal(toSharing.select.props.value,'whole_room');
+  toSharing.select.props.onChange({target:{value:'single_bed'}});
+  assert.equal(toSharing.changed[4],'r');assert.equal(toSharing.changed[5],'a','Retain current primary bed for same-room conversion');
+  const toWhole=dialog(single);toWhole.select.props.onChange({target:{value:'whole_room'}});
+  assert.equal(toWhole.changed[4],'r');assert.equal(toWhole.changed[5],'');
+  const blocked=dialog(single,[neighbor]);blocked.select.props.onChange({target:{value:'whole_room'}});assert.equal(blocked.changed[4],'');
   console.log('PASS UI destinations: no-ops excluded, same-room moves/conversions preserved, current conflicts excluded, save/button share validation');
   const db = new PGlite();
   try {
@@ -141,6 +164,11 @@ function loadPure(name) {
     await good(a.roomId,a.beds[1]); // same room, Pending
     await good(b.roomId,b.beds[0]);
     await good(b.roomId,null,'whole_room');
+    await bad(b.roomId,null,'whole_room'); // unchanged exclusive allocation
+    const primary=(await one('select bed_id from admissions where id=$1',[pkg.admission_id])).bed_id;
+    await good(b.roomId,primary,'single_bed'); // same room, retain primary
+    assert.equal((await one('select allocation_mode from admissions where id=$1',[pkg.admission_id])).allocation_mode,'single_bed');
+    await good(b.roomId,null,'whole_room'); // sole occupant may regain exclusivity
     await good(c.roomId,null,'whole_room');
     await db.query("update admissions set status='Active' where id=$1",[pkg.admission_id]);
     await good(a.roomId,a.beds[0]);
