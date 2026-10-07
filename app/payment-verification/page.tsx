@@ -14,6 +14,8 @@ import PaymentsNavigation from "@/components/payments/PaymentsNavigation";
 import { supabase } from "@/lib/supabase";
 import { getSupabaseErrorMessage } from "@/lib/supabaseErrors";
 import {
+  allocatedPaymentLabel,
+  rentPeriodLabel,
   isSecurityDepositReceipt,
   securityDepositAdmissionId,
   residentReceiptNotes,
@@ -462,8 +464,8 @@ export default function PaymentVerificationPage() {
 
                         <td className="px-3 py-3 text-sm text-slate-700">
                           <p className="font-medium">{paymentAllocationRows.length
-                            ? [...new Set(allocationBills.map(item=>item?.bill_type==='Other Charges'?'Additional Charges':String(item?.bill_type || 'Bill payment')))].join(' + ')
-                            : !receipt.bill_id && isSecurityDepositReceipt(receipt.notes) ? 'Security Deposit' : firstText(bill,['bill_type']) || 'Bill payment'}</p>
+                            ? allocatedPaymentLabel(paymentAllocationRows,bills)
+                            : !receipt.bill_id && isSecurityDepositReceipt(receipt.notes) ? 'Security Deposit' : firstText(bill,['bill_type'])==='Rent' ? rentPeriodLabel(bill?.billing_month) : firstText(bill,['bill_type']) || 'Bill payment'}</p>
                           {paymentAllocationRows.length>1 && <div className="mt-1 text-xs text-slate-500">{paymentAllocationRows.map(a=><p key={a.bill_id}>{bills.find(b=>b.id===a.bill_id)?.bill_type==='Other Charges'?'Additional Charges':String(bills.find(b=>b.id===a.bill_id)?.bill_type || 'Bill')}: {money(a.amount)}</p>)}</div>}
                           <p className="mt-1 line-clamp-1 max-w-56 break-words text-xs text-slate-500">{receiptNotes(receipt)}</p>
                           <details className="mt-2 max-w-md">

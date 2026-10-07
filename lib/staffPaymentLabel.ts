@@ -12,5 +12,5 @@ export function staffPaymentLabel(payment: { id: string; resident_id: string; bi
   if (linked.length) return allocatedPaymentLabel(linked, residentBills) ||
     [...new Set(linked.map(a => reference(residentBills.find(bill => bill.id === a.bill_id)!)))].join(" + ");
   const legacy = residentBills.find(bill => bill.id === payment.bill_id);
-  return legacy ? reference(legacy) : "Unknown bill";
+  return legacy ? legacy.bill_type === 'Rent' && legacy.billing_month ? allocatedPaymentLabel([{bill_id:String(legacy.id)}],residentBills) : reference(legacy) : "Unknown bill";
 }

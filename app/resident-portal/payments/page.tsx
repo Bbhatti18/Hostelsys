@@ -12,7 +12,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import { billPaymentObligation, receiptPurposeError, combinedPaymentPreview, combinedPaymentAllocationError } from "@/lib/paymentObligations";
+import { billPaymentObligation, receiptPurposeError, combinedPaymentPreview } from "@/lib/paymentObligations";
 import { paymentBillAmounts } from "@/lib/paymentAllocations";
 import { buildResidentFinancialSummary } from "@/lib/residentFinancialSummary";
 import { supabase } from "@/lib/supabase";
@@ -29,6 +29,7 @@ import {
 } from "@/lib/notifications/client";
 import {
   allocatedPaymentLabel,
+  rentPeriodLabel,
   securityDepositAdmissionId,
   receiptPaymentMethod,
   residentReceiptNotes,
@@ -243,15 +244,17 @@ export default function ResidentPaymentsPage() {
     [bills, admission],
   );
 
+  const isCombined = selectedBillId.startsWith('combined:');
+  const selectedCombinedDeposit = isCombined ? bills.find(bill=>bill.id===selectedBillId.split(':')[2]) : null;
   const selectedBill = useMemo(
-    () => bills.find((bill) => bill.id === selectedBillId),
+    () => bills.find((bill) => bill.id === (selectedBillId.startsWith('combined:') ? selectedBillId.split(':')[1] : selectedBillId)),
     [bills, selectedBillId],
   );
 
   const financial = useMemo(() => buildResidentFinancialSummary({ admission, room: null, bed: null, bills, payments }), [admission, bills, payments]);
   const selectedObligation = selectedBill ? billPaymentObligation(selectedBill, payments) : null;
   const combined = combinedPaymentPreview(financial);
-  const canonicalAmount = selectedBillId === "combined" ? combined.total : selectedObligation?.amount ?? 0;
+  const canonicalAmount = (selectedObligation?.amount ?? 0) + (isCombined && selectedCombinedDeposit ? billPaymentObligation(selectedCombinedDeposit,payments).amount : 0);
   const actualTotal = additionalPaymentTotal(canonicalAmount, Number(additionalAmount) || 0);
   const depositOutstanding = financial.depositBalance;
 
@@ -340,10 +343,12 @@ entries.push({
 
   function selectBill(billId: string) {
     setWithAdditional(false);
-    const bill = bills.find((item) => item.id === billId);
+    const selectedCombined = billId.startsWith('combined:');
+    const bill = bills.find((item) => item.id === (selectedCombined ? billId.split(':')[1] : billId));
+    const selectedDeposit = selectedCombined ? bills.find(item=>item.id===billId.split(':')[2]) : null;
     setSelectedBillId(billId);
     setAmount(
-      billId === "combined" ? String(combined.total) :
+      selectedCombined && bill && selectedDeposit ? String(billPaymentObligation(bill,payments).amount+billPaymentObligation(selectedDeposit,payments).amount) :
       billId === SECURITY_DEPOSIT_OPTION || (depositBill && billId === depositBill.id)
         ? String(depositOutstanding)
         : bill
@@ -399,7 +404,7 @@ entries.push({
       return;
     }
 
-    if (!withAdditional && selectedBillId !== "combined" && submittedAmount < canonicalAmount) {
+    if (!withAdditional && !isCombined && submittedAmount < canonicalAmount) {
       setError("For a partial payment, choose Rent or Security Deposit in Make a Payment and acknowledge the remaining balance.");
       setUploading(false); return;
     }
@@ -414,15 +419,16 @@ entries.push({
       try {
         const invalid = additionalChargeError(additionalAmount, additionalCategory, additionalDescription);
         if (invalid) throw new Error(invalid);
-        const rentBill = selectedBillId === "combined" ? regularBills.find(bill => bill.bill_type === "Rent" && billPaymentObligation(bill, payments).amount === financial.monthlyRentDue) : selectedBill?.bill_type === "Rent" ? selectedBill : null;
-        const selectedDeposit = selectedBillId === "combined" || selectedBillId === depositBill?.id ? depositBill : null;
+        const rentBill = selectedBill?.bill_type === "Rent" ? selectedBill : null;
+        const selectedDeposit = isCombined ? selectedCombinedDeposit : selectedBill?.bill_type === 'Security Deposit' ? selectedBill : null;
+        if (isCombined && (!rentBill || !selectedDeposit || billPaymentObligation(selectedDeposit,payments).amount<=0)) throw new Error("The selected combined obligations changed. Select the Rent month and Deposit again.");
         if (!admission?.id || (!rentBill && !selectedDeposit) || !(canonicalAmount > 0)) throw new Error("Select current Rent and/or Security Deposit.");
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) throw new Error("Please sign in again.");
         const formData = new FormData();
         formData.set("file", selectedFile);
         formData.set("admissionId", text(admission.id));
-        if (rentBill) formData.set("rentBillId", rentBill.id);
+        if (rentBill) { formData.set("rentBillId", rentBill.id); formData.set("rentBillingMonth", rentBill.billing_month); }
         if (selectedDeposit) formData.set("depositBillId", selectedDeposit.id);
         formData.set("amount", String(actualTotal));
         formData.set("additionalAmount", additionalAmount);
@@ -441,14 +447,11 @@ entries.push({
       finally { setUploading(false); }
       return;
     }
-    if (selectedBillId === "combined") {
-      const combinedError = combinedPaymentAllocationError(financial, submittedAmount);
-      const rentBill = regularBills.find((bill) => {
-        const obligation = billPaymentObligation(bill, payments);
-        return obligation.purpose === "Rent" && obligation.amount === financial.monthlyRentDue;
-      });
-      if (combinedError || !admission?.id || !depositBill || !rentBill) {
-        setError(combinedError || "Both current Rent and Security Deposit obligations must be available.");
+    if (isCombined) {
+      const rentBill = selectedBill?.bill_type === 'Rent' ? selectedBill : null;
+      const combinedDeposit = selectedCombinedDeposit;
+      if (submittedAmount!==canonicalAmount || !admission?.id || !combinedDeposit || !rentBill || billPaymentObligation(combinedDeposit,payments).amount<=0) {
+        setError("Both selected Rent and Security Deposit obligations must be available at the exact combined amount.");
         setUploading(false);
         return;
       }
@@ -467,7 +470,8 @@ entries.push({
       formData.set("file", selectedFile);
       formData.set("admissionId", text(admission.id));
       formData.set("rentBillId", rentBill.id);
-      formData.set("depositBillId", depositBill.id);
+      formData.set("rentBillingMonth", rentBill.billing_month);
+      formData.set("depositBillId", combinedDeposit.id);
       formData.set("amount", String(submittedAmount));
       formData.set("paymentMethod", paymentMethod.trim());
       formData.set("referenceNumber", referenceNumber.trim());
@@ -674,16 +678,16 @@ entries.push({
 
         <PaymentFollowups onSubmitted={loadData} onSelectAdditional={()=>setWithAdditional(true)} additionalPaymentForm={
           <form onSubmit={uploadReceipt} className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
-            <label className="min-w-0"><span className="mb-2 block text-sm font-semibold">Payment For *</span><select required value={selectedBillId} onChange={(event) => { selectBill(event.target.value); setWithAdditional(true); }} disabled={loading || uploading} className={inputClass}><option value="">Select Rent or Security Deposit</option>{financial.monthlyRentDue > 0 && !regularBills.some(bill => isPayableBill(bill.bill_status)) && <option disabled>Rent — {money(financial.monthlyRentDue)} due (awaiting bill)</option>}{depositOutstanding > 0 && <option value={depositBill ? depositBill.id : SECURITY_DEPOSIT_OPTION} disabled={pendingDepositReceipt || !depositBill}>{depositBill ? `Security Deposit (${depositBill.bill_number})` : "Security Deposit"} — {money(depositOutstanding)}{pendingDepositReceipt ? " — Pending Verification" : ""}</option>}{regularBills.filter((bill) => isPayableBill(bill.bill_status) && bill.outstanding > 0).map((bill) => <option key={bill.id} value={bill.id}>{bill.bill_number} — {monthLabel(bill.billing_month)} — {money(bill.outstanding)}</option>)}{financial.monthlyRentDue > 0 && depositOutstanding > 0 && <option value="combined">Rent + Security Deposit — {money(combined.total)} total due</option>}</select></label>
-            <label className="min-w-0"><span className="mb-2 block text-sm font-semibold">Amount *</span><input required type="number" min="0.01" step="0.01" max={selectedBillId === SECURITY_DEPOSIT_OPTION || selectedBillId === depositBill?.id ? depositOutstanding : selectedObligation?.amount} value={withAdditional ? canonicalAmount : amount} onChange={(event) => setAmount(event.target.value)} readOnly={withAdditional || selectedBillId === "combined"} disabled={uploading || (!selectedBill && selectedBillId !== SECURITY_DEPOSIT_OPTION && selectedBillId !== "combined")} className={inputClass} /></label>
+            <label className="min-w-0"><span className="mb-2 block text-sm font-semibold">Payment For *</span><select required value={selectedBillId} onChange={(event) => { selectBill(event.target.value); setWithAdditional(true); }} disabled={loading || uploading} className={inputClass}><option value="">Select Rent or Security Deposit</option>{depositOutstanding > 0 && depositBill && <option value={depositBill.id} disabled={pendingDepositReceipt}>Security Deposit — {money(depositOutstanding)}{pendingDepositReceipt ? " — Pending Verification" : ""}</option>}{regularBills.filter(bill=>isPayableBill(bill.bill_status)&&billPaymentObligation(bill,payments).amount>0).map(bill=><option key={bill.id} value={bill.id}>{bill.bill_type==="Rent" ? rentPeriodLabel(bill.billing_month) : bill.bill_number} — {money(billPaymentObligation(bill,payments).amount)}</option>)}{depositOutstanding > 0 && depositBill && regularBills.filter(bill=>bill.bill_type==="Rent"&&isPayableBill(bill.bill_status)&&billPaymentObligation(bill,payments).amount>0).map(bill=><option key={"combined:"+bill.id} value={"combined:"+bill.id+":"+depositBill.id}>{rentPeriodLabel(bill.billing_month)} + Security Deposit — {money(billPaymentObligation(bill,payments).amount+depositOutstanding)}</option>)}</select></label>
+            <label className="min-w-0"><span className="mb-2 block text-sm font-semibold">Amount *</span><input required type="number" min="0.01" step="0.01" max={isCombined ? canonicalAmount : selectedBillId === SECURITY_DEPOSIT_OPTION || selectedBillId === depositBill?.id ? depositOutstanding : selectedObligation?.amount} value={withAdditional ? canonicalAmount : amount} onChange={(event) => setAmount(event.target.value)} readOnly={withAdditional || isCombined} disabled={uploading || (!selectedBill && selectedBillId !== SECURITY_DEPOSIT_OPTION && !isCombined)} className={inputClass} /></label>
             <label className="min-w-0"><span className="mb-2 block text-sm font-semibold">Payment Method *</span><input required value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} disabled={uploading} className={inputClass} placeholder="Cash deposit, bank transfer, card, etc." /></label>
             <label className="min-w-0"><span className="mb-2 block text-sm font-semibold">Reference Number</span><input value={referenceNumber} onChange={(event) => setReferenceNumber(event.target.value)} disabled={uploading} className={inputClass} placeholder="Transaction reference" /></label>
             <label className="min-w-0 md:col-span-2"><span className="mb-2 block text-sm font-semibold">Upload Payment Receipt *</span><input id="payment-receipt-file" required type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" onChange={handleFileChange} disabled={uploading} className={inputClass} /></label>
             <label className="min-w-0 md:col-span-2"><span className="mb-2 block text-sm font-semibold">Notes</span><textarea value={notes} onChange={(event) => setNotes(event.target.value)} disabled={uploading} className={`${inputClass} min-h-24`} /></label>
-            {(selectedBillId === "combined" || selectedObligation?.purpose === "Rent" || selectedObligation?.purpose === "Security Deposit") && <div className="space-y-3 rounded-xl border border-slate-200 p-4 md:col-span-2">
+            {(isCombined || selectedObligation?.purpose === "Rent" || selectedObligation?.purpose === "Security Deposit") && <div className="space-y-3 rounded-xl border border-slate-200 p-4 md:col-span-2">
               <p className="text-sm font-semibold">Other charges included in this payment</p>
               {withAdditional && <>
-                <p className="text-sm">{selectedBillId === "combined" ? `Rent: ${money(financial.monthlyRentDue)} + Security Deposit: ${money(depositOutstanding)}` : `${selectedObligation?.purpose}: ${money(canonicalAmount)}`}</p>
+                <p className="text-sm">{isCombined ? `${rentPeriodLabel(selectedBill?.billing_month)}: ${money(selectedObligation?.amount ?? 0)} + Security Deposit: ${money(canonicalAmount-(selectedObligation?.amount ?? 0))}` : `${selectedObligation?.purpose}: ${money(canonicalAmount)}`}</p>
                 <label className="block text-sm">Additional Charges Amount (PKR)<input required type="number" min="0.01" step="0.01" value={additionalAmount} onChange={e => setAdditionalAmount(e.target.value)} disabled={uploading} className={inputClass} /></label>
                 <label className="block text-sm">Additional Charges For<select value={additionalCategory} onChange={e => setAdditionalCategory(e.target.value)} disabled={uploading} className={inputClass}>{ADDITIONAL_CATEGORIES.map(category => <option key={category}>{category}</option>)}</select></label>
                 <label className="block text-sm">Description{additionalCategory === "Other" ? " (required)" : " (optional)"}<input maxLength={500} required={additionalCategory === "Other"} value={additionalDescription} onChange={e => setAdditionalDescription(e.target.value)} disabled={uploading} className={inputClass} /></label>
@@ -692,7 +696,7 @@ entries.push({
               </>}
             </div>}
             <p className="text-xs text-slate-500 md:col-span-2">PDF, JPEG or PNG / maximum 5 MB. Uploading your receipt is required.</p>
-            <div className="md:col-span-2"><button type="submit" disabled={uploading || loading || !selectedBill && selectedBillId !== "combined" && selectedBillId !== SECURITY_DEPOSIT_OPTION} className="w-full rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:w-auto">{uploading ? "Submitting..." : "Submit for Verification"}</button></div>
+            <div className="md:col-span-2"><button type="submit" disabled={uploading || loading || !selectedBill && !isCombined && selectedBillId !== SECURITY_DEPOSIT_OPTION} className="w-full rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:w-auto">{uploading ? "Submitting..." : "Submit for Verification"}</button></div>
           </form>
         } />
         <details className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><summary className="cursor-pointer font-semibold text-slate-900">Previous Payment Receipts</summary><HistoricalEvidence /></details>

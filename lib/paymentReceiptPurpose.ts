@@ -45,10 +45,18 @@ export function residentReceiptNotes(notes: unknown) {
     .trim();
 }
 
-/** Labels come from actual allocated bill types, never the allocation count. */
+/** Calendar month labels are independent of the browser's timezone. */
+export function rentPeriodLabel(month: unknown) {
+  const value = String(month ?? "");
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(value)
+    ? `Rent — ${new Date(value + '-01T12:00:00Z').toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })}`
+    : value ? `Rent — ${value}` : "Rent";
+}
+
+/** Labels come from actual allocated bills, never the allocation count. */
 export function allocatedPaymentLabel(allocations: Array<{ bill_id: string }>, bills: Array<Record<string, unknown>>) {
   return [...new Set(allocations.map(allocation => {
     const bill = bills.find(row => row.id === allocation.bill_id);
-    return bill?.bill_type === "Other Charges" ? "Additional Charges" : String(bill?.bill_type || "");
+    return bill?.bill_type === "Rent" ? rentPeriodLabel(bill.billing_month) : bill?.bill_type === "Other Charges" ? "Additional Charges" : String(bill?.bill_type || "");
   }).filter(Boolean))].join(" + ");
 }

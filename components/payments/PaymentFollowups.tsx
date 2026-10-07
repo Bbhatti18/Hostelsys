@@ -46,9 +46,10 @@ export default function PaymentFollowups({ staff = false, tasks = false, onSubmi
   function choosePurpose(value:string, billId?:string) {
     setResidentPurpose(value);setAgainst(value==='historical'?'historical':value==='other'?'other':'current');
     setAck(false);setError('');setMessage('');
-    const rent=rents.find(r=>r.bill_id===billId)||rents.find(r=>Number(r.available)>0)||rents[0];
-    const deposit=deposits.find(r=>r.bill_id===billId)||deposits.find(r=>Number(r.available)>0)||deposits[0];
-    const chosen=value==='rent'?[rent]:value==='deposit'?[deposit]:value==='combined'?[rent,deposit]:value.startsWith('bill:')?[rows.find(r=>r.bill_id===value.slice(5))]:[];
+    const selectedRentId=value.startsWith('rent:')?value.slice(5):value.startsWith('combined:')?value.split(':')[1]:billId;
+    const rent=rents.find(r=>r.bill_id===selectedRentId);
+    const deposit=value.startsWith('combined:')?deposits.find(r=>r.bill_id===value.split(':')[2]&&r.admission_id===rent?.admission_id):deposits.find(r=>r.bill_id===billId)||deposits.find(r=>Number(r.available)>0)||deposits[0];
+    const chosen=value==='rent'||value.startsWith('rent:')?[rent]:value==='deposit'?[deposit]:value==='combined'||value.startsWith('combined:')?(rent&&deposit?[rent,deposit]:[]):value.startsWith('bill:')?[rows.find(r=>r.bill_id===value.slice(5))]:[];
     setAmounts(Object.fromEntries(chosen.filter((r):r is Obligation=>!!r).map(r=>[r.bill_id,Number(r.available)>0?String(r.available):''])));
     if(value==='additional')onSelectAdditional?.();
   }
@@ -56,7 +57,7 @@ export default function PaymentFollowups({ staff = false, tasks = false, onSubmi
     if(staff || tasks)return;
     const select=(event:Event)=>{
       const id=(event as CustomEvent<string>).detail;const row=rows.find(r=>r.bill_id===id);
-      if(row) { choosePurpose(row.purpose==='Rent'?'rent':row.purpose==='Security Deposit'?'deposit':'bill:'+id,id);document.getElementById('make-payment')?.scrollIntoView({behavior:'smooth',block:'start'}); }
+      if(row) { choosePurpose(row.purpose==='Rent'?'rent:'+id:row.purpose==='Security Deposit'?'deposit':'bill:'+id,id);document.getElementById('make-payment')?.scrollIntoView({behavior:'smooth',block:'start'}); }
     };
     window.addEventListener('select-payment-obligation',select);
     return()=>window.removeEventListener('select-payment-obligation',select);
@@ -64,6 +65,9 @@ export default function PaymentFollowups({ staff = false, tasks = false, onSubmi
   async function submit() {
     setError(""); setMessage("");
     if (!file || !method || (against==="current" && (!selected.length || selected.length>2 || new Set(selected.map(r=>r.admission_id)).size!==1))) { setError("Select one obligation or Rent + Deposit from the same admission, a method and receipt."); return; }
+    if (against==='current' && (residentPurpose.startsWith('combined:')
+      ? selected.length!==2 || !residentPurpose.split(':').slice(1).every(id=>selected.some(r=>r.bill_id===id))
+      : residentPurpose.startsWith('rent:') && (selected.length!==1 || selected[0].bill_id!==residentPurpose.slice(5)))) { setError("The selected obligations changed. Select the exact Rent month again."); return; }
     if (against==="current" && selected.some(r => Number(amounts[r.bill_id])>Number(r.available))) { setError("Submitted amount exceeds available balance. Review pending receipts."); return; }
     if (against==="current" && selected.length===2 && !["Rent","Security Deposit"].every(p=>selected.some(r=>r.purpose===p))) { setError("Combine Rent with Security Deposit, or submit another obligation separately."); return; }
     if (against==="current" && partial && (!ack || !date || !reason.trim())) { setError("Acknowledge the remainder and enter a future commitment date and reason."); return; }
@@ -72,7 +76,7 @@ export default function PaymentFollowups({ staff = false, tasks = false, onSubmi
     try {
       const {data} = await supabase.auth.getSession(); if (!data.session) throw new Error("Please sign in again.");
       const body = new FormData(); body.set("admissionId",selected[0]?.admission_id || rows[0]?.admission_id || "");
-      if(against==="current")body.set("obligationItems",JSON.stringify(selected.map(r=>({bill_id:r.bill_id,amount:Number(amounts[r.bill_id])}))));
+      if(against==="current")body.set("obligationItems",JSON.stringify(selected.map(r=>({bill_id:r.bill_id,amount:Number(amounts[r.bill_id]),purpose:r.purpose,billing_month:r.billing_month}))));
       else if(against==="historical") {body.set("historical","true");body.set("historicalPurpose",historyPurpose);body.set("historicalDate",historyDate);}
       else {body.set("additionalAmount",evidenceAmount);body.set("additionalCategory","Other");body.set("additionalDescription",reason);}
       body.set("notes",reason);body.set("amount",against==="current" ? String(total) : evidenceAmount); body.set("paymentMethod",method); body.set("referenceNumber",reference);
@@ -103,16 +107,15 @@ export default function PaymentFollowups({ staff = false, tasks = false, onSubmi
         {message && <p role="status" className="mb-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700">{message}</p>}
         <label className="block text-sm font-semibold text-slate-700">What are you paying for?<select className={input+' mt-2 rounded-xl py-3'} value={residentPurpose} disabled={busy} onChange={e=>choosePurpose(e.target.value)}>
           <option value="">Select a payment</option>
-          {!!rents.length && <option value="rent">Rent</option>}{!!deposits.length && <option value="deposit">Security Deposit</option>}
-          {rents.some(r=>Number(r.available)>0) && deposits.some(d=>Number(d.available)>0) && <option value="combined">Rent + Security Deposit</option>}
+          {rents.map(r=><option key={'rent:'+r.bill_id} value={'rent:'+r.bill_id} disabled={Number(r.available)<=0}>Rent — {month(r.billing_month)} — {money(r.available)}{Number(r.available)<=0?' — Pending Verification':''}</option>)}{!!deposits.length && <option value="deposit">Security Deposit — {money(deposits[0].available)}</option>}
+          {rents.filter(r=>Number(r.available)>0).map(r=>{const d=deposits.find(d=>d.admission_id===r.admission_id&&Number(d.available)>0);return d?<option key={'combined:'+r.bill_id} value={'combined:'+r.bill_id+':'+d.bill_id}>Rent — {month(r.billing_month)} + Security Deposit — {money(Number(r.available)+Number(d.available))}</option>:null;})}
           <option value="other">Other Charges</option><option value="historical">Previous Payment Receipt</option>
           {payable.filter(r=>!['Rent','Security Deposit'].includes(r.purpose)).map(r=><option value={'bill:'+r.bill_id} key={r.bill_id}>{r.purpose} / {month(r.billing_month)}</option>)}
-          {additionalPaymentForm && <option value="additional">Rent / Deposit + Other Charges</option>}
+          {additionalPaymentForm && <option value="additional">Include Other Charges</option>}
         </select></label>
         {residentPurpose==='additional' ? additionalPaymentForm : residentPurpose && <form key={formVersion} className="mt-5 space-y-5" onSubmit={e=>{e.preventDefault();void submit();}}>
           <fieldset disabled={busy} className="space-y-5">
             {against==='current' && <>
-              {(residentPurpose==='rent'||residentPurpose==='combined') && rents.length>1 && <label className="block text-sm">Rent month<select className={input+' mt-2'} value={chosen.find(r=>r.purpose==='Rent')?.bill_id||''} onChange={e=>choosePurpose(residentPurpose,e.target.value)}>{rents.map(r=><option key={r.bill_id} value={r.bill_id}>{month(r.billing_month)}</option>)}</select></label>}
               <div className="grid gap-3 sm:grid-cols-2">{chosen.map(r=><div key={r.bill_id} className="min-w-0 rounded-2xl bg-indigo-50/60 p-4"><h3 className="font-semibold text-slate-900">{r.purpose}{r.purpose==='Rent'?' / '+month(r.billing_month):''}</h3><p className="mt-1 text-sm text-slate-600">{Number(r.pending)>0?'Financial balance:':'Amount due:'} <strong>{money(r.remaining)}</strong></p>{Number(r.pending)>0 && <div className="mt-1 space-y-1 text-xs text-amber-800"><p>Awaiting verification: {money(r.pending)}</p><p>Available to pay now: {money(preview(r).available)}</p><p>Your financial balance changes only after verification.</p><p>Amount still available to pay after this submission: {money(preview(r).projectedAvailableRemainder)}</p></div>}
                 {Number(r.available)>0 ? <label className="mt-4 block text-sm font-medium">Amount you are paying<input required className={input+' mt-2 rounded-xl bg-white py-3'} type="number" min="0.01" step="0.01" max={r.available} value={amounts[r.bill_id]||''} onChange={e=>setAmounts(a=>({...a,[r.bill_id]:e.target.value}))}/></label>:<p className="mt-3 text-sm">Your receipt is awaiting review. No further payment is needed right now.</p>}
               </div>)}</div>
@@ -136,7 +139,7 @@ export default function PaymentFollowups({ staff = false, tasks = false, onSubmi
         </form>}
         <p className="mt-4 text-xs text-slate-500">For late fees and your full bill details, visit <Link href="/resident-portal/bills" className="font-semibold text-indigo-700 underline">My Bills</Link>.</p>
       </section>
-      {payable.some(r=>r.followups.some(f=>f.status!=='Resolved')) && <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-bold text-slate-900">Payment Requests &amp; Plans</h2><div className="mt-3 space-y-3">{payable.map(r=>r.followups.filter(f=>f.status!=='Resolved').map(f=><article key={f.id} className="rounded-xl border border-slate-100 p-4"><div className="flex flex-wrap justify-between gap-2"><h3 className="font-semibold">{f.kind==='request'?'Payment Requested':'Your payment plan'} / {r.purpose}</h3><span className="text-xs font-medium text-amber-700">{f.status}</span></div><p className="mt-1 text-sm">{money(f.amount)} / Due {f.due_date}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-600">{f.note}</p><button type="button" className="mt-3 text-sm font-semibold text-indigo-700" onClick={()=>{choosePurpose(r.purpose==='Rent'?'rent':r.purpose==='Security Deposit'?'deposit':'bill:'+r.bill_id,r.bill_id);document.getElementById('make-payment')?.scrollIntoView({behavior:'smooth'});}}>Make this payment</button></article>))}</div></section>}
+      {payable.some(r=>r.followups.some(f=>f.status!=='Resolved')) && <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-bold text-slate-900">Payment Requests &amp; Plans</h2><div className="mt-3 space-y-3">{payable.map(r=>r.followups.filter(f=>f.status!=='Resolved').map(f=><article key={f.id} className="rounded-xl border border-slate-100 p-4"><div className="flex flex-wrap justify-between gap-2"><h3 className="font-semibold">{f.kind==='request'?'Payment Requested':'Your payment plan'} / {r.purpose}</h3><span className="text-xs font-medium text-amber-700">{f.status}</span></div><p className="mt-1 text-sm">{money(f.amount)} / Due {f.due_date}</p><p className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-600">{f.note}</p><button type="button" className="mt-3 text-sm font-semibold text-indigo-700" onClick={()=>{choosePurpose(r.purpose==='Rent'?'rent:'+r.bill_id:r.purpose==='Security Deposit'?'deposit':'bill:'+r.bill_id,r.bill_id);document.getElementById('make-payment')?.scrollIntoView({behavior:'smooth'});}}>Make this payment</button></article>))}</div></section>}
     </div>;
   }
   // Staff Payments uses a contained request panel; resident and Dashboard views stay unchanged.
