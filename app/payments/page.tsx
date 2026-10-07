@@ -1,4 +1,6 @@
 "use client";
+import RentCorrectionContext, { type RentCorrection } from "@/components/payments/RentCorrectionContext";
+import { readDashboardRows } from "@/lib/dashboardRead";
 import PaymentFollowups from "@/components/payments/PaymentFollowups";
 
 import {
@@ -138,33 +140,32 @@ export default function PaymentsPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
+  const [corrections, setCorrections] = useState<RentCorrection[]>([]);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     setError("");
 
-    const [paymentsResult, residentsResult, billsResult, allocationsResult] = await Promise.all([
-      supabase
-        .from("payments")
-        .select("*")
-        .order("created_at", { ascending: false }),
+    const [paymentsResult, residentsResult, billsResult, allocationsResult, correctionsResult] = await Promise.all([
+      readDashboardRows(supabase.from("payments").select("*").order("created_at", { ascending: false }).order("id")),
       supabase.from("residents").select("*"),
-      supabase
-        .from("bills")
-        .select("*")
-        .order("created_at", { ascending: false }),
-      supabase.from("payment_allocations").select("payment_id,bill_id,amount"),
+      readDashboardRows(supabase.from("bills").select("*").order("created_at", { ascending: false }).order("id")),
+      readDashboardRows(supabase.from("payment_allocations").select("payment_id,bill_id,amount").order("payment_id").order("bill_id")),
+      readDashboardRows(supabase.from("rent_period_corrections").select("id,resident_id,admission_id,original_payment_id,replacement_payment_id,wrong_rent_bill_id").order("id")),
     ]);
 
     const firstError =
-      paymentsResult.error || residentsResult.error || billsResult.error || allocationsResult.error;
+      paymentsResult.error || residentsResult.error || billsResult.error || allocationsResult.error || correctionsResult.error;
 
     if (firstError) {
       setError(getSupabaseErrorMessage(firstError, "Financial records could not be loaded."));
+      setCorrections([]);
       setPayments([]);
       setResidents([]);
       setBills([]);
       setAllocations([]);
     } else {
+      setCorrections((correctionsResult.data ?? []) as RentCorrection[]);
       setPayments((paymentsResult.data ?? []) as Payment[]);
       setResidents((residentsResult.data ?? []) as GenericRow[]);
       setBills((billsResult.data ?? []) as GenericRow[]);
@@ -919,8 +920,9 @@ export default function PaymentsPage() {
                         </p>
 
                         <p className="mt-1 text-xs text-slate-500">
-                          {staffPaymentLabel(payment, allocations, bills)}
+                          {corrections.some(c => c.original_payment_id === payment.id) && "Historical allocation: "}{staffPaymentLabel(payment, allocations, bills)}
                         </p>
+                        <RentCorrectionContext paymentId={payment.id} corrections={corrections} payments={payments} allocations={allocations} bills={bills} />
                       </td>
 
                       <td className="px-5 py-4 text-sm text-slate-700">
@@ -941,7 +943,7 @@ export default function PaymentsPage() {
                             payment.payment_status
                           )}`}
                         >
-                          {payment.payment_status}
+                          {corrections.some(c => c.original_payment_id === payment.id) ? "Corrected / Reallocated" : payment.payment_status}
                         </span>
                       </td>
 

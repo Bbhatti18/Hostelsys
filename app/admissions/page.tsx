@@ -1,4 +1,5 @@
 "use client";
+import AdmissionFinancialState from "@/components/admissions/AdmissionFinancialState";
 
 import { requireContractStaff, reviewContractSignature } from "@/lib/contractActions";
 import Link from "next/link";
@@ -1216,8 +1217,9 @@ const rent = getAdmissionRent(admission, depositBills, depositPayments);
 </td>
 
 <td className="px-5 py-4 text-sm text-slate-700">
-  <p>Rent: {money(admission.monthly_rent)}</p>
-  <p className="mt-1 text-xs font-semibold">Rent: {rent.state === "verified" ? "Verified" : "Pending"}</p>
+  <p>Monthly rent: {money(admission.monthly_rent)}</p>
+  <AdmissionFinancialState admission={admission} bills={depositBills} payments={depositPayments} />
+  <p className="mt-1 text-xs font-semibold">Initial admission-month rent: {rent.state === "verified" ? "Paid" : "Pending"}</p>
 
   <p className="mt-1 text-xs text-slate-500">
     Deposit: {money(deposit.required)}

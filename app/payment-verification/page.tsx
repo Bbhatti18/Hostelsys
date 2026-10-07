@@ -1,4 +1,6 @@
 "use client";
+import RentCorrectionContext, { type RentCorrection } from "@/components/payments/RentCorrectionContext";
+import { readDashboardRows } from "@/lib/dashboardRead";
 import { receiptDisplayStatus } from "@/lib/receiptDisplayStatus";
 import HistoricalEvidence from "@/components/payments/HistoricalEvidence";
 
@@ -139,6 +141,8 @@ export default function PaymentVerificationPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
+  const [corrections, setCorrections] = useState<RentCorrection[]>([]);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -150,26 +154,26 @@ export default function PaymentVerificationPage() {
       paymentsResult,
       allocationsResult,
       followupsResult,
+      correctionsResult,
     ] = await Promise.all([
-      supabase
-        .from("payment_receipts")
-        .select("*")
-        .order("created_at", { ascending: false }),
+      readDashboardRows(supabase.from("payment_receipts").select("*").order("created_at", { ascending: false }).order("id")),
       supabase.from("residents").select("*"),
-      supabase.from("bills").select("*"),
-      supabase.from("payments").select("id,bill_id,amount,payment_status"),
-      supabase.from("payment_allocations").select("payment_id,bill_id,amount"),
+      readDashboardRows(supabase.from("bills").select("*").order("id")),
+      readDashboardRows(supabase.from("payments").select("id,resident_id,bill_id,amount,payment_status").order("id")),
+      readDashboardRows(supabase.from("payment_allocations").select("payment_id,bill_id,amount").order("payment_id").order("bill_id")),
       supabase.rpc("payment_followup_data"),
+      readDashboardRows(supabase.from("rent_period_corrections").select("id,resident_id,admission_id,original_payment_id,replacement_payment_id,wrong_rent_bill_id").order("id")),
     ]);
 
     const firstError =
       receiptsResult.error ||
       residentsResult.error ||
-      billsResult.error || paymentsResult.error || allocationsResult.error || followupsResult.error;
+      billsResult.error || paymentsResult.error || allocationsResult.error || followupsResult.error || correctionsResult.error;
 
     if (firstError) {
       setError(getSupabaseErrorMessage(firstError, "Payment receipts could not be loaded."));
     } else {
+      setCorrections((correctionsResult.data ?? []) as RentCorrection[]);
       setReceipts((receiptsResult.data ?? []) as PaymentReceipt[]);
       setResidents((residentsResult.data ?? []) as GenericRow[]);
       setBills((billsResult.data ?? []) as GenericRow[]);
@@ -463,11 +467,12 @@ export default function PaymentVerificationPage() {
                         </td>
 
                         <td className="px-3 py-3 text-sm text-slate-700">
-                          <p className="font-medium">{paymentAllocationRows.length
+                          <p className="font-medium">{corrections.some(c => c.original_payment_id === receipt.payment_id) && "Historical allocation: "}{paymentAllocationRows.length
                             ? allocatedPaymentLabel(paymentAllocationRows,bills)
                             : !receipt.bill_id && isSecurityDepositReceipt(receipt.notes) ? 'Security Deposit' : firstText(bill,['bill_type'])==='Rent' ? rentPeriodLabel(bill?.billing_month) : firstText(bill,['bill_type']) || 'Bill payment'}</p>
                           {paymentAllocationRows.length>1 && <div className="mt-1 text-xs text-slate-500">{paymentAllocationRows.map(a=><p key={a.bill_id}>{bills.find(b=>b.id===a.bill_id)?.bill_type==='Other Charges'?'Additional Charges':String(bills.find(b=>b.id===a.bill_id)?.bill_type || 'Bill')}: {money(a.amount)}</p>)}</div>}
                           <p className="mt-1 line-clamp-1 max-w-56 break-words text-xs text-slate-500">{receiptNotes(receipt)}</p>
+                          <RentCorrectionContext paymentId={receipt.payment_id} corrections={corrections} payments={payments} allocations={allocations} bills={bills} />
                           <details className="mt-2 max-w-md">
                             <summary className="cursor-pointer text-xs font-semibold text-indigo-700">View Details{extra && displayStatus(receipt)==='Pending Verification' ? ' / Classify Additional Charges' : ''}</summary>
                             <div className="mt-2 max-h-96 space-y-2 overflow-y-auto break-words rounded-lg border bg-white p-3 text-sm">
@@ -552,7 +557,7 @@ export default function PaymentVerificationPage() {
                               displayStatus(receipt)
                             )}`}
                           >
-                            {displayStatus(receipt)}
+                            {corrections.some(c => c.original_payment_id === receipt.payment_id) ? "Corrected / Reallocated" : displayStatus(receipt)}
                           </span>
                         </td>
 
