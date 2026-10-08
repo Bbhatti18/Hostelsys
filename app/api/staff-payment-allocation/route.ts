@@ -2,14 +2,44 @@ import { NextRequest } from "next/server";
 import { apiError, apiJson, requireStaff } from "@/lib/adminApiAuth";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { notifyResidentEvent } from "@/lib/notifications/server";
+import { rentDueDate } from "@/lib/billApproval";
+import { currentRentMonth } from "@/lib/missingRentPeriods";
 
 const roles = ["admin", "super admin", "accountant"];
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function id(value: unknown) { return typeof value === "string" && uuid.test(value) ? value : null; }
 
+async function missingRentPreview(admissionId: string, month: string) {
+  const { data: admission, error } = await supabaseAdmin.from("admissions").select("id,resident_id,admission_date,status,monthly_rent").eq("id", admissionId).maybeSingle();
+  if (error || !admission || !["Pending", "Active"].includes(admission.status) || month > currentRentMonth()) throw new Error("Current admission and elapsed/current month required.");
+  const dueDate = rentDueDate(admission.admission_date, month);
+  const [latest, resident, existing] = await Promise.all([
+    supabaseAdmin.from("admissions").select("id").eq("resident_id", admission.resident_id).order("admission_date", { ascending: false }).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(1).maybeSingle(),
+    supabaseAdmin.from("residents").select("status").eq("id", admission.resident_id).maybeSingle(),
+    supabaseAdmin.from("bills").select("id").eq("admission_id", admissionId).eq("bill_type", "Rent").eq("billing_month", month).limit(1),
+  ]);
+  if (latest.error || resident.error || existing.error || latest.data?.id !== admissionId || !resident.data || resident.data.status === "Archived") throw new Error("Current resident/admission could not be confirmed.");
+  if (existing.data?.length) throw new Error("Rent bill already exists, including cancelled or paid history. Refresh the page.");
+  let amount = Number(admission.monthly_rent);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    const contract = await supabaseAdmin.from("contracts").select("monthly_rent").eq("admission_id", admissionId).not("status", "in", "(Cancelled,Terminated)").order("created_at", { ascending: false }).order("id", { ascending: false }).limit(1).maybeSingle();
+    if (contract.error) throw new Error("Canonical rent amount could not be confirmed.");
+    amount = Number(contract.data?.monthly_rent);
+  }
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error("Canonical monthly rent is missing.");
+  return { admissionId, month, amount, dueDate };
+}
+
 export async function GET(request: NextRequest) {
-  const { staff, response } = await requireStaff(request, roles);
+  const preview = request.nextUrl.searchParams.get("preview") === "missing-rent";
+  const { staff, response } = await requireStaff(request, preview ? ["admin", "super admin"] : roles);
   if (!staff) return response;
+  if (preview) {
+    const admissionId = id(request.nextUrl.searchParams.get("admissionId")), month = request.nextUrl.searchParams.get("month") ?? "";
+    if (!admissionId || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return apiError("Exact admission and month required.", 400);
+    try { return apiJson(await missingRentPreview(admissionId, month)); }
+    catch (e) { return apiError(e instanceof Error ? e.message : "Preview unavailable.", 409); }
+  }
   if (request.nextUrl.searchParams.get("history") === "true") {
     const { data, error } = await supabaseAdmin.rpc("staff_correction_history", { p_actor: staff.email });
     return error ? apiError(error.message, 409) : apiJson({ corrections: data });
@@ -29,7 +59,12 @@ export async function POST(request: NextRequest) {
   if (!staff) return response;
   if (body?.action === "generate") {
     if (!id(body.admissionId) || typeof body.month !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(body.month)) return apiError("Exact admission and month required.", 400);
-    const { data, error } = await supabaseAdmin.rpc("generate_missing_staff_rent", { p_admission: body.admissionId, p_month: body.month, p_actor: staff.email });
+    if (body.confirmed !== true) return apiError("Explicit bill generation confirmation required.", 400);
+    try {
+      const preview = await missingRentPreview(body.admissionId, body.month);
+      if (body.expectedAmount !== preview.amount || body.expectedDueDate !== preview.dueDate) return apiError("Rent amount or due date changed. Reload the preview.", 409);
+    } catch (e) { return apiError(e instanceof Error ? e.message : "Preview unavailable.", 409); }
+    const { data, error } = await supabaseAdmin.rpc("generate_missing_staff_rent", { p_admission: body.admissionId, p_month: body.month, p_actor: staff.email, p_expected_amount: body.expectedAmount, p_expected_due_date: body.expectedDueDate });
     return error ? apiError(error.message, 409) : apiJson({ billId: data, message: "Missing rent generated for approval. Utilities remain in their existing workflow." });
   }
   if (!body || !["verify", "correct"].includes(body.action) || !id(body.requestId) || (!id(body.paymentId) && !id(body.receiptId)) ||

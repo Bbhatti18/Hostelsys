@@ -1,5 +1,7 @@
 "use client";
 import BillPaymentActions from "@/components/payments/BillPaymentActions";
+import GenerateMissingRentBill from "@/components/payments/GenerateMissingRentBill";
+import { isCurrentRentAdmission, missingRentMonths } from "@/lib/missingRentPeriods";
 
 import {
   FormEvent,
@@ -248,7 +250,7 @@ export default function BillingPage() {
 }
 
 function BillingContent() {
-  const { canViewRevenue } = usePermissions();
+  const { canViewRevenue, role, profile } = usePermissions();
   const [bills, setBills] = useState<Bill[]>([]);
   const [residents, setResidents] = useState<GenericRow[]>([]);
   const [admissions, setAdmissions] = useState<GenericRow[]>([]);
@@ -433,7 +435,9 @@ function BillingContent() {
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => void refresh(), 0);
-    return () => window.clearTimeout(timeoutId);
+    const refreshOnFocus = () => void refresh();
+    window.addEventListener("focus", refreshOnFocus);
+    return () => { window.clearTimeout(timeoutId); window.removeEventListener("focus", refreshOnFocus); };
   }, [refresh]);
 
   const isElectricityEnabled = Boolean(
@@ -1604,6 +1608,14 @@ function BillingContent() {
   return (
     <main className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
+        {profile?.status?.toLowerCase() === "active" && ["admin", "super admin"].includes(role.toLowerCase()) && typeFilter !== "Security Deposit" && <section className="rounded-xl border border-indigo-200 bg-white p-4">
+          <h2 className="font-semibold">Missing Rent Bills</h2>
+          <p className="text-sm text-slate-600">Generate an exact missing period, including initial rent for Pending admissions.</p>
+          {admissions.filter(a => isCurrentRentAdmission(a, admissions) && missingRentMonths(a, bills).length > 0 && residents.some(r => r.id === a.resident_id && r.status !== "Archived")).map(a => <div key={text(a.id)} className="mt-3">
+            <p className="text-sm font-medium">{text(residents.find(r => r.id === a.resident_id)?.full_name)} — Admission {text(a.admission_date)}</p>
+            <GenerateMissingRentBill admissionId={text(a.id)} months={missingRentMonths(a, bills)} onSaved={async generatedId => { setSearch(generatedId); setStatusFilter("Pending Approval"); setMonthFilter("All"); await refresh(); }} />
+          </div>)}
+        </section>}
         <section className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-indigo-600">

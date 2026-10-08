@@ -78,17 +78,3 @@ export default function StaffAllocationEditor({ paymentId, receiptId, correction
     </section>}
   </div>;
 }
-
-export function GenerateMissingRent({ admissionId, onSaved }: { admissionId: string; onSaved: () => void }) {
-  const { role, profile } = usePermissions();
-  const [month, setMonth] = useState(""), [message, setMessage] = useState(""), [busy, setBusy] = useState(false);
-  if (profile?.status?.toLowerCase() !== "active" || !["admin", "super admin"].includes(role.toLowerCase())) return null;
-  return <details className="mt-2 text-xs"><summary className="cursor-pointer">Generate Missing Rent Bill</summary>
-    <input aria-label="Missing rent month" type="month" value={month} onChange={e => setMonth(e.target.value)} />
-    <button type="button" disabled={!month || busy} onClick={async () => {
-      if (!window.confirm(`Generate missing Rent — ${month} for approval? Existing bills will never be overwritten.`)) return;
-      setBusy(true); try { const result = await call("/api/staff-payment-allocation", { action: "generate", admissionId, month }); setMessage(result.message); onSaved(); }
-      catch (e) { setMessage(e instanceof Error ? e.message : "Generation failed."); } finally { setBusy(false); }
-    }}>Generate for approval</button><p role="status">{message}</p>
-  </details>;
-}

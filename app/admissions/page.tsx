@@ -1,5 +1,6 @@
 "use client";
-import { GenerateMissingRent } from "@/components/payments/StaffAllocationEditor";
+import GenerateMissingRentBill from "@/components/payments/GenerateMissingRentBill";
+import { isCurrentRentAdmission, missingRentMonths } from "@/lib/missingRentPeriods";
 import AdmissionFinancialState from "@/components/admissions/AdmissionFinancialState";
 
 import { requireContractStaff, reviewContractSignature } from "@/lib/contractActions";
@@ -176,6 +177,7 @@ export default function AdmissionsPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [admissionDataVersion, setAdmissionDataVersion] = useState(0);
+  const [generatedRentBillId, setGeneratedRentBillId] = useState("");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -249,6 +251,9 @@ export default function AdmissionsPage() {
       url.searchParams.delete("created");
       window.history.replaceState(null, "", `${url.pathname}${url.search}`);
     }
+    const refreshOnFocus = () => void refresh();
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
   }, [refresh]);
 
   const filteredAdmissions = useMemo(() => {
@@ -857,6 +862,7 @@ export default function AdmissionsPage() {
             }`}
           >
             {error || message}
+            {!error && generatedRentBillId && <Link href={`/billing?billId=${encodeURIComponent(generatedRentBillId)}`} className="ml-2 underline">Open generated rent bill in Billing</Link>}
           </section>
         )}
 
@@ -1220,7 +1226,7 @@ const rent = getAdmissionRent(admission, depositBills, depositPayments);
 <td className="px-5 py-4 text-sm text-slate-700">
   <p>Monthly rent: {money(admission.monthly_rent)}</p>
   <AdmissionFinancialState admission={admission} bills={depositBills} payments={depositPayments} />
-  {["Pending", "Active"].includes(admission.status) && <GenerateMissingRent admissionId={admission.id} onSaved={() => void refresh()} />}
+  {depositBills && resident?.status !== "Archived" && isCurrentRentAdmission(admission, admissions) && <GenerateMissingRentBill admissionId={admission.id} months={missingRentMonths(admission, depositBills)} onSaved={async generatedId => { setGeneratedRentBillId(generatedId); setMessage("Missing rent bill generated for approval."); await refresh(); }} />}
   <p className="mt-1 text-xs font-semibold">Initial admission-month rent: {rent.state === "verified" ? "Paid" : "Pending"}</p>
 
   <p className="mt-1 text-xs text-slate-500">
