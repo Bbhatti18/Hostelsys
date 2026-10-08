@@ -1226,7 +1226,7 @@ const rent = getAdmissionRent(admission, depositBills, depositPayments);
 <td className="px-5 py-4 text-sm text-slate-700">
   <p>Monthly rent: {money(admission.monthly_rent)}</p>
   <AdmissionFinancialState admission={admission} bills={depositBills} payments={depositPayments} />
-  {depositBills && resident?.status !== "Archived" && isCurrentRentAdmission(admission, admissions) && <GenerateMissingRentBill admissionId={admission.id} months={missingRentMonths(admission, depositBills)} onSaved={async generatedId => { setGeneratedRentBillId(generatedId); setMessage("Missing rent bill generated for approval."); await refresh(); }} />}
+  {depositBills && resident?.status !== "Archived" && isCurrentRentAdmission(admission, admissions) && <GenerateMissingRentBill admissionId={admission.id} months={missingRentMonths(admission, depositBills)} existingBills={depositBills} onSaved={async generatedId => { setGeneratedRentBillId(generatedId); setMessage("Missing rent bill generated for approval."); await refresh(); }} />}
   <p className="mt-1 text-xs font-semibold">Initial admission-month rent: {rent.state === "verified" ? "Paid" : "Pending"}</p>
 
   <p className="mt-1 text-xs text-slate-500">

@@ -133,6 +133,7 @@ function loadPure(name){name=name.replace(/^.*\//,'').replace(/\.ts$/,'');assert
  async function missingFixture(){const x=await fixture();await db.query('delete from bills where id=$1',[x.rent]);await db.query('update admissions set monthly_rent=12000,admission_date=$2::date where id=$1',[x.a,terms.first]);return x;}
  const generateConfirmed=(x,amount=12000,due=terms.first,actor='verifier@local.invalid')=>one('select generate_missing_staff_rent($1,$2,$3,$4,$5::date) id',[x.a,month,actor,amount,due]);
  const billCount=async x=>Number((await one("select count(*) n from bills where admission_id=$1 and bill_type='Rent'",[x.a])).n);
+ for(const status of ["Draft","Pending Approval","Pending","Unpaid","Partially Paid","Overdue","Paid","Cancelled"]) {const x=await missingFixture(),id=randomUUID();await db.query("insert into bills(id,bill_number,resident_id,admission_id,bill_type,billing_month,due_date,rent_amount,total_amount,bill_status) values($1::uuid,$1::text,$2,$3,'Rent',$4,$5::date,12000,12000,$6)",[id,x.r,x.a,month,terms.first,status]);const before=(await one('select to_jsonb(b) data from bills b where id=$1',[id])).data;await assert.rejects(generateConfirmed(x),/already exists/);assert.equal(await billCount(x),1);assert.deepEqual((await one('select to_jsonb(b) data from bills b where id=$1',[id])).data,before);}
  const changedRent=await missingFixture();
  // Represents a concurrent edit committed after preview but before the RPC obtains its lock.
  await db.query('update admissions set monthly_rent=14000 where id=$1',[changedRent.a]);

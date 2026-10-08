@@ -1611,9 +1611,9 @@ function BillingContent() {
         {profile?.status?.toLowerCase() === "active" && ["admin", "super admin"].includes(role.toLowerCase()) && typeFilter !== "Security Deposit" && <section className="rounded-xl border border-indigo-200 bg-white p-4">
           <h2 className="font-semibold">Missing Rent Bills</h2>
           <p className="text-sm text-slate-600">Generate an exact missing period, including initial rent for Pending admissions.</p>
-          {admissions.filter(a => isCurrentRentAdmission(a, admissions) && missingRentMonths(a, bills).length > 0 && residents.some(r => r.id === a.resident_id && r.status !== "Archived")).map(a => <div key={text(a.id)} className="mt-3">
+          {admissions.filter(a => isCurrentRentAdmission(a, admissions) && (missingRentMonths(a, bills).length > 0 || bills.some(b => b.admission_id === a.id && b.bill_type === "Rent")) && residents.some(r => r.id === a.resident_id && r.status !== "Archived")).map(a => <div key={text(a.id)} className="mt-3">
             <p className="text-sm font-medium">{text(residents.find(r => r.id === a.resident_id)?.full_name)} — Admission {text(a.admission_date)}</p>
-            <GenerateMissingRentBill admissionId={text(a.id)} months={missingRentMonths(a, bills)} onSaved={async generatedId => { setSearch(generatedId); setStatusFilter("Pending Approval"); setMonthFilter("All"); await refresh(); }} />
+            <GenerateMissingRentBill admissionId={text(a.id)} months={missingRentMonths(a, bills)} existingBills={bills} onSaved={async generatedId => { setSearch(generatedId); setStatusFilter("Pending Approval"); setMonthFilter("All"); await refresh(); }} />
           </div>)}
         </section>}
         <section className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between">

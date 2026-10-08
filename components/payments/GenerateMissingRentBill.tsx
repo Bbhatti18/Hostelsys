@@ -16,24 +16,29 @@ async function request(path: string, body?: object) {
   return result;
 }
 
-export default function GenerateMissingRentBill({ admissionId, months, onSaved }: {
-  admissionId: string; months: string[]; onSaved: (billId: string) => void | Promise<void>;
+export default function GenerateMissingRentBill({ admissionId, months, existingBills = [], onSaved }: {
+  admissionId: string; months: string[]; existingBills?: Record<string, unknown>[]; onSaved: (billId: string) => void | Promise<void>;
 }) {
   const { role, profile } = usePermissions();
   const [open, setOpen] = useState(false), [month, setMonth] = useState(months[0] ?? "");
   const [preview, setPreview] = useState<Preview | null>(null), [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false), [message, setMessage] = useState(""), [billId, setBillId] = useState("");
-  if (profile?.status?.toLowerCase() !== "active" || !["admin", "super admin"].includes(role.toLowerCase()) || (!months.length && !billId)) return null;
-  const selected = months.includes(month) ? month : months[0] ?? "";
+  const existing = existingBills.filter(b => b.admission_id === admissionId && b.bill_type === "Rent");
+  const available = months.filter(m => !existing.some(b => b.billing_month === m));
+  if (profile?.status?.toLowerCase() !== "active" || !["admin", "super admin"].includes(role.toLowerCase()) || (!available.length && !billId && !existing.length)) return null;
+  const selected = available.includes(month) ? month : available[0] ?? "";
   async function load(period: string) {
     setMonth(period); setPreview(null); setConfirmed(false); setMessage(""); setBusy(true); setOpen(true);
     try { setPreview(await request(`/api/staff-payment-allocation?preview=missing-rent&admissionId=${encodeURIComponent(admissionId)}&month=${encodeURIComponent(period)}`)); }
     catch (e) { setMessage(e instanceof Error ? e.message : "Preview failed."); } finally { setBusy(false); }
   }
   return <div className="mt-2 rounded border border-indigo-200 bg-indigo-50 p-3 text-xs">
-    {!billId && <button type="button" disabled={busy || !selected} onClick={() => void load(selected)} className="rounded bg-indigo-700 px-3 py-2 font-semibold text-white">Generate Missing Rent Bill</button>}
+    {existing.length > 0 && <details open className="mb-2"><summary className="cursor-pointer">Existing rent bills — automatic generation blocked</summary>
+      {existing.map(b => <p key={String(b.id)} className="mt-1">{rentPeriodLabel(String(b.billing_month))}: Rent bill already exists for this month. Status: {String(b.bill_status ?? "Unknown")}. <Link href={`/billing?billId=${encodeURIComponent(String(b.id))}`} className="underline">{String(b.bill_number || b.id)}</Link>{b.bill_status === "Cancelled" && " — Replacement requires a separate explicitly authorized, audited workflow."}</p>)}
+    </details>}
+    {!billId && selected && <button type="button" disabled={busy} onClick={() => void load(selected)} className="rounded bg-indigo-700 px-3 py-2 font-semibold text-white">Generate Missing Rent Bill</button>}
     {open && !billId && <div className="mt-3 space-y-2">
-      <label>Missing billing month <select aria-label="Missing rent month" value={selected} disabled={busy} onChange={e => void load(e.target.value)}>{months.map(m => <option key={m} value={m}>{rentPeriodLabel(m)}</option>)}</select></label>
+      <label>Missing billing month <select aria-label="Missing rent month" value={selected} disabled={busy} onChange={e => void load(e.target.value)}>{available.map(m => <option key={m} value={m}>{rentPeriodLabel(m)}</option>)}</select></label>
       {preview && <><p>{rentPeriodLabel(preview.month)} — Rs{preview.amount.toLocaleString("en-PK")} — Due {preview.dueDate}</p>
         <p>Rent only. The bill will require approval in Billing.</p>
         <label className="flex gap-2"><input type="checkbox" checked={confirmed} disabled={busy} onChange={e => setConfirmed(e.target.checked)} />I confirm this month, amount and due date.</label>

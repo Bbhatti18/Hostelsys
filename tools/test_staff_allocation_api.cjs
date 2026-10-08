@@ -2,15 +2,15 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),ts=require('typescript');
 const uuid='11111111-1111-4111-8111-111111111111';
 let role='admin',active=true,replayed=false,notificationSupported=true,notificationFails=false;const calls=[],notifications=[];
-let existingBill=false,currentAdmission=uuid,residentStatus='Inactive',monthlyRent=12000,rpcError=null,rpcTermsChange=null;
+let existingBill=false,existingStatus="Paid",currentAdmission=uuid,residentStatus='Inactive',monthlyRent=12000,rpcError=null,rpcTermsChange=null,rpcConcurrentGeneration=false;
 function pure(file,deps={}){const m={exports:{}};vm.runInNewContext('(function(require,module,exports){'+ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText+'})',{Intl,Date})(id=>deps[id],m,m.exports);return m.exports;}
 const billApproval=pure('lib/billApproval.ts'),periods=pure('lib/missingRentPeriods.ts',{'./billApproval':billApproval});
-function from(table){let selected='';const q={select(s){selected=s;return q},eq(){return q},order(){return q},limit(){return q},not(){return q},maybeSingle:async()=>({data:table==='admissions'?(selected==='id'?{id:currentAdmission}:{id:uuid,resident_id:uuid,admission_date:'2027-04-01',status:'Pending',monthly_rent:monthlyRent}):table==='residents'?{status:residentStatus}:{monthly_rent:0},error:null}),then(resolve){return Promise.resolve({data:existingBill?[{id:uuid}]:[],error:null}).then(resolve)}};return q;}
+function from(table){let selected='';const q={select(s){selected=s;return q},eq(){return q},order(){return q},limit(){return q},not(){return q},maybeSingle:async()=>({data:table==='admissions'?(selected==='id'?{id:currentAdmission}:{id:uuid,resident_id:uuid,admission_date:'2027-04-01',status:'Pending',monthly_rent:monthlyRent}):table==='residents'?{status:residentStatus}:{monthly_rent:0},error:null}),then(resolve){return Promise.resolve({data:existingBill?[{id:uuid,bill_number:"RENT-123",bill_status:existingStatus}]:[],error:null}).then(resolve)}};return q;}
 const reply=(body,status=200)=>({status,body});
 const deps={
  'next/server':{},
  '@/lib/adminApiAuth':{apiError:(error,status)=>reply({error},status),apiJson:body=>reply(body),requireStaff:async(req,roles)=>active&&roles.includes(role)?{staff:{email:'staff@local.invalid',role},response:null}:{staff:null,response:reply({error:'denied'},403)}},
- '@/lib/supabaseAdmin':{supabaseAdmin:{from,rpc:async(name,args)=>{calls.push({name,args});if(name==='generate_missing_staff_rent'&&rpcTermsChange){const terms=rpcTermsChange;rpcTermsChange=null;if(args.p_expected_amount!==terms.amount||args.p_expected_due_date!==terms.due)return {data:null,error:{message:"Rent amount or due date changed. Reload the preview."}};}return {data:{payment_id:uuid,replayed,notification_supported:notificationSupported},error:rpcError}}}},
+ '@/lib/supabaseAdmin':{supabaseAdmin:{from,rpc:async(name,args)=>{calls.push({name,args});if(name==='generate_missing_staff_rent'&&rpcConcurrentGeneration){existingBill=true;rpcConcurrentGeneration=false;}if(name==='generate_missing_staff_rent'&&rpcTermsChange){const terms=rpcTermsChange;rpcTermsChange=null;if(args.p_expected_amount!==terms.amount||args.p_expected_due_date!==terms.due)return {data:null,error:{message:"Rent amount or due date changed. Reload the preview."}};}return {data:{payment_id:uuid,replayed,notification_supported:notificationSupported},error:rpcError}}}},
  '@/lib/billApproval':billApproval,
  '@/lib/missingRentPeriods':{...periods,currentRentMonth:()=> '2027-04'},
  '@/lib/notifications/server':{notifyResidentEvent:async(...args)=>{notifications.push(args);if(notificationFails)throw new Error('Delivery unavailable');return {warning:false}}},
@@ -39,6 +39,7 @@ const post=body=>m.exports.POST({json:async()=>body});
  assert.deepEqual(JSON.parse(JSON.stringify((await get(preview)).body)),{admissionId:uuid,month:'2027-04',amount:12000,dueDate:'2027-04-01'});
  const generationCalls=calls.length;
  for(const bad of [{...generate,confirmed:false},{...generate,expectedDueDate:'2027-04-30'},{...generate,expectedAmount:14000},{...generate,month:'2027-03'},{...generate,month:'2027-05'}])assert.ok([400,409].includes((await post(bad)).status));
+ for(const status of ["Pending Approval","Pending","Unpaid","Partially Paid","Overdue","Paid","Cancelled"]){existingBill=true;existingStatus=status;const blocked=await get(preview);assert.equal(blocked.status,409);assert.ok(blocked.body.error.includes('Rent bill already exists for this month.'));assert.ok(blocked.body.error.includes('Status: '+status));assert.ok(blocked.body.error.includes('RENT-123'));assert.equal((await post(generate)).status,409);}existingBill=false;
  existingBill=true;assert.equal((await get(preview)).status,409);assert.equal((await post(generate)).status,409);existingBill=false;
  currentAdmission='another-admission';assert.equal((await get(preview)).status,409);currentAdmission=uuid;
  residentStatus='Archived';assert.equal((await post(generate)).status,409);residentStatus='Inactive';
@@ -46,7 +47,7 @@ const post=body=>m.exports.POST({json:async()=>body});
  role='accountant';assert.equal((await get(preview)).status,403);role='admin';
  assert.equal(calls.length,generationCalls,'invalid or stale generation never calls a mutation RPC');
  for(const changed of [{amount:14000,due:'2027-04-01'},{amount:12000,due:'2027-04-02'}]){rpcTermsChange=changed;assert.equal((await post(generate)).status,409,'RPC rejects terms changed after API preview validation');assert.equal(calls.at(-1).args.p_expected_amount,12000);assert.equal(calls.at(-1).args.p_expected_due_date,'2027-04-01');}
- rpcError={message:'Rent bill already exists'};assert.equal((await post(generate)).status,409);rpcError=null;
+ rpcError={message:'Rent bill already exists'};assert.equal((await post(generate)).status,409);rpcConcurrentGeneration=true;existingStatus='Pending Approval';const concurrent=await post(generate);assert.equal(concurrent.status,409);assert.ok(concurrent.body.error.includes('RENT-123'));assert.ok(concurrent.body.error.includes('Status: Pending Approval'));existingBill=false;rpcError=null;
  console.log('PASS missing rent API: canonical preview, exact admission/month, explicit confirmation, stale amount/date rejection, current admission, period/duplicate guards and Admin authorization.');
  notificationSupported=true;notificationFails=true;
  const financialCalls=calls.length;const deliveryFailure=await post(valid);

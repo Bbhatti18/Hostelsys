@@ -16,10 +16,10 @@ async function missingRentPreview(admissionId: string, month: string) {
   const [latest, resident, existing] = await Promise.all([
     supabaseAdmin.from("admissions").select("id").eq("resident_id", admission.resident_id).order("admission_date", { ascending: false }).order("created_at", { ascending: false }).order("id", { ascending: false }).limit(1).maybeSingle(),
     supabaseAdmin.from("residents").select("status").eq("id", admission.resident_id).maybeSingle(),
-    supabaseAdmin.from("bills").select("id").eq("admission_id", admissionId).eq("bill_type", "Rent").eq("billing_month", month).limit(1),
+    supabaseAdmin.from("bills").select("id,bill_number,bill_status").eq("admission_id", admissionId).eq("bill_type", "Rent").eq("billing_month", month).limit(1),
   ]);
   if (latest.error || resident.error || existing.error || latest.data?.id !== admissionId || !resident.data || resident.data.status === "Archived") throw new Error("Current resident/admission could not be confirmed.");
-  if (existing.data?.length) throw new Error("Rent bill already exists, including cancelled or paid history. Refresh the page.");
+  if (existing.data?.length) { const bill = existing.data[0]; throw new Error(`Rent bill already exists for this month. Status: ${bill.bill_status ?? "Unknown"}. Reference: ${bill.bill_number || bill.id}. Refresh the page.${bill.bill_status === "Cancelled" ? " Replacement requires a separate explicitly authorized, audited workflow." : ""}`); }
   let amount = Number(admission.monthly_rent);
   if (!Number.isFinite(amount) || amount <= 0) {
     const contract = await supabaseAdmin.from("contracts").select("monthly_rent").eq("admission_id", admissionId).not("status", "in", "(Cancelled,Terminated)").order("created_at", { ascending: false }).order("id", { ascending: false }).limit(1).maybeSingle();
@@ -65,6 +65,11 @@ export async function POST(request: NextRequest) {
       if (body.expectedAmount !== preview.amount || body.expectedDueDate !== preview.dueDate) return apiError("Rent amount or due date changed. Reload the preview.", 409);
     } catch (e) { return apiError(e instanceof Error ? e.message : "Preview unavailable.", 409); }
     const { data, error } = await supabaseAdmin.rpc("generate_missing_staff_rent", { p_admission: body.admissionId, p_month: body.month, p_actor: staff.email, p_expected_amount: body.expectedAmount, p_expected_due_date: body.expectedDueDate });
+    if (error?.message.includes("Rent bill already exists")) {
+      // Another Admin may have generated it after our preview. Reload its reference read-only.
+      try { await missingRentPreview(body.admissionId, body.month); }
+      catch (e) { return apiError(e instanceof Error ? e.message : error.message, 409); }
+    }
     return error ? apiError(error.message, 409) : apiJson({ billId: data, message: "Missing rent generated for approval. Utilities remain in their existing workflow." });
   }
   if (!body || !["verify", "correct"].includes(body.action) || !id(body.requestId) || (!id(body.paymentId) && !id(body.receiptId)) ||

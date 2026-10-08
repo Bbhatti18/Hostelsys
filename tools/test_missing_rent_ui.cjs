@@ -6,7 +6,7 @@ const approval=compile('lib/billApproval.ts'),periods=compile('lib/missingRentPe
 const admission={id:'admission',resident_id:'resident',admission_date:'2027-04-01',status:'Pending',created_at:'2027-04-01T00:00:00Z'};
 assert.deepEqual(Array.from(periods.missingRentMonths(admission,[{admission_id:'admission',bill_type:'Rent',billing_month:'2027-03'}],'2027-04')),['2027-04']);
 assert.deepEqual(Array.from(periods.missingRentMonths(admission,[],'2027-05')),['2027-04','2027-05']);
-for(const status of ['Paid','Cancelled','Pending Approval'])assert.equal(periods.missingRentMonths(admission,[{admission_id:'admission',bill_type:'Rent',billing_month:'2027-04',bill_status:status}],'2027-04').length,0);
+for(const status of ["Pending Approval","Pending","Unpaid","Partially Paid","Overdue","Paid","Cancelled"])assert.equal(periods.missingRentMonths(admission,[{admission_id:'admission',bill_type:'Rent',billing_month:'2027-04',bill_status:status}],'2027-04').length,0);
 assert.equal(periods.missingRentMonths({...admission,admission_date:'2027-06-01'},[],'2027-05').length,0);
 assert.equal(periods.missingRentMonths({...admission,status:'Completed'},[],'2027-05').length,0);
 assert.equal(periods.isCurrentRentAdmission(admission,[admission,{...admission,id:'new',admission_date:'2027-05-01'}]),false);
@@ -41,6 +41,8 @@ const button=(tree,label)=>nodes(tree).find(n=>n.type==='button'&&n.props.childr
  failPreview=true;nodes(second()).find(n=>n.type==='select').props.onChange({target:{value:'2027-05'}});await new Promise(setImmediate);
  assert.match(renderToStaticMarkup(second()),/Rent bill already exists/);assert.equal(button(second(),'Confirm generation'),undefined);
  assert.equal(requests.filter(r=>r.opts.method==='POST').length,1);
+ for(const status of ["Pending Approval","Pending","Unpaid","Partially Paid","Overdue","Paid","Cancelled"]){const h=harness(),C=compile('components/payments/GenerateMissingRentBill.tsx',{...deps,react:h.react}).default;h.reset();const tree=C({...props,months:['2027-04'],existingBills:[{id:'existing-bill',bill_number:'RENT-123',admission_id:'admission',bill_type:'Rent',billing_month:'2027-04',bill_status:status}]});const html=renderToStaticMarkup(tree);assert.match(html,/Rent bill already exists for this month\./);assert.ok(html.includes('Status: '+status));assert.match(html,/RENT-123/);assert.match(html,/billing\?billId=existing-bill/);assert.equal(button(tree,'Generate Missing Rent Bill'),undefined);if(status==='Cancelled')assert.match(html,/separate explicitly authorized, audited workflow/);}
+ const differentHooks=harness(),Different=compile('components/payments/GenerateMissingRentBill.tsx',{...deps,react:differentHooks.react}).default;differentHooks.reset();assert.ok(button(Different({...props,months:['2027-04'],existingBills:[{id:'other',admission_id:'other-admission',bill_type:'Rent',billing_month:'2027-04'}]}),'Generate Missing Rent Bill'));
  const noneHooks=harness(),None=compile('components/payments/GenerateMissingRentBill.tsx',{...deps,react:noneHooks.react}).default;noneHooks.reset();assert.equal(None({...props,months:[]}),null);
  assert.match(fs.readFileSync('app/admissions/page.tsx','utf8'),/GenerateMissingRentBill admissionId=\{admission.id\} months=\{missingRentMonths/);
  assert.match(fs.readFileSync('app/billing/page.tsx','utf8'),/Missing Rent Bills/);
