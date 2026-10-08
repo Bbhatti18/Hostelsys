@@ -59,7 +59,7 @@ const React=require('react');
 function page(status,filter='All',paymentStatus='Cancelled'){
  let index=0;const r={id:'r',resident_id:'resident',payment_id:'p',bill_id:null,status,amount:24000,created_at:'2026-10-05T00:00:00Z'};
  const states={1:[r],2:[{id:'resident',full_name:'Resident'}],3:[{id:'p',payment_status:paymentStatus}],8:filter,9:false};
- const deps={'react':{...React,useState(v){const i=index++;return [i in states?states[i]:v,()=>{}];},useEffect(){},useMemo:f=>f(),useCallback:f=>f},'react/jsx-runtime':require('react/jsx-runtime'),'@/lib/receiptDisplayStatus':helper.exports};
+ const deps={'react':{...React,useState(v){const i=index++;return [i in states?states[i]:v,()=>{}];},useEffect(){},useMemo:f=>f(),useCallback:f=>f},'react/jsx-runtime':require('react/jsx-runtime'),'@/components/payments/StaffAllocationEditor':{__esModule:true,default:()=>React.createElement('button',null,'Select Allocation / Verify')},'@/lib/receiptDisplayStatus':helper.exports};
  const m={exports:{}};
  const req=id=>deps[id]||new Proxy({},{get:(_,key)=>key==='ADDITIONAL_CATEGORIES'?[]:key==='default'?()=>null:()=>null});
  vm.runInNewContext('(function(require,module,exports){'+ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText+'})',{})(req,m,m.exports);
@@ -74,7 +74,7 @@ assert.doesNotMatch(page('Verified','Verified'),/Receipt Verification: Verified/
 assert.match(cancelledPage,/>Verified<\/p><p[^>]*>0<\/p>/);
 assert.match(cancelledPage,/>Cancelled<\/p><p[^>]*>1<\/p>/);
 assert.match(page('Verified','All','Verified'),/>Verified<\/p><p[^>]*>1<\/p>/);
-assert.match(page('Pending Verification','All','Pending'),/>Verify<\/button>/);
+assert.match(page('Pending Verification','All','Pending'),/>Select Allocation \/ Verify<\/button>/);
 assert.match(page('Pending Verification','All','Pending'),/>Reject<\/button>/);
 assert.match(page('Rejected','All','Rejected'),/>Rejected<\/p><p[^>]*>1<\/p>/);
 assert.match(source,/displayStatus\(item\) === "Verified"/);

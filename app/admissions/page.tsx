@@ -1,4 +1,5 @@
 "use client";
+import { GenerateMissingRent } from "@/components/payments/StaffAllocationEditor";
 import AdmissionFinancialState from "@/components/admissions/AdmissionFinancialState";
 
 import { requireContractStaff, reviewContractSignature } from "@/lib/contractActions";
@@ -1219,6 +1220,7 @@ const rent = getAdmissionRent(admission, depositBills, depositPayments);
 <td className="px-5 py-4 text-sm text-slate-700">
   <p>Monthly rent: {money(admission.monthly_rent)}</p>
   <AdmissionFinancialState admission={admission} bills={depositBills} payments={depositPayments} />
+  {["Pending", "Active"].includes(admission.status) && <GenerateMissingRent admissionId={admission.id} onSaved={() => void refresh()} />}
   <p className="mt-1 text-xs font-semibold">Initial admission-month rent: {rent.state === "verified" ? "Paid" : "Pending"}</p>
 
   <p className="mt-1 text-xs text-slate-500">

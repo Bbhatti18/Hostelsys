@@ -1,4 +1,7 @@
 "use client";
+import StaffAllocationEditor from "@/components/payments/StaffAllocationEditor";
+import { readStaffCorrections } from "@/lib/staffCorrectionHistory";
+import PaymentAuditDetails from "@/components/payments/PaymentAuditDetails";
 import RentCorrectionContext, { type RentCorrection } from "@/components/payments/RentCorrectionContext";
 import { readDashboardRows } from "@/lib/dashboardRead";
 import PaymentFollowups from "@/components/payments/PaymentFollowups";
@@ -19,6 +22,7 @@ import {
   roundMoney,
 } from "@/lib/financials";
 import { getSupabaseErrorMessage } from "@/lib/supabaseErrors";
+import { rentPeriodLabel } from "@/lib/paymentReceiptPurpose";
 import { staffPaymentLabel, type StaffPaymentAllocation } from "@/lib/staffPaymentLabel";
 
 type GenericRow = Record<string, unknown>;
@@ -151,11 +155,11 @@ export default function PaymentsPage() {
       supabase.from("residents").select("*"),
       readDashboardRows(supabase.from("bills").select("*").order("created_at", { ascending: false }).order("id")),
       readDashboardRows(supabase.from("payment_allocations").select("payment_id,bill_id,amount").order("payment_id").order("bill_id")),
-      readDashboardRows(supabase.from("rent_period_corrections").select("id,resident_id,admission_id,original_payment_id,replacement_payment_id,wrong_rent_bill_id").order("id")),
+      readStaffCorrections(),
     ]);
 
     const firstError =
-      paymentsResult.error || residentsResult.error || billsResult.error || allocationsResult.error || correctionsResult.error;
+      paymentsResult.error || residentsResult.error || billsResult.error || allocationsResult.error;
 
     if (firstError) {
       setError(getSupabaseErrorMessage(firstError, "Financial records could not be loaded."));
@@ -165,6 +169,7 @@ export default function PaymentsPage() {
       setBills([]);
       setAllocations([]);
     } else {
+      if (correctionsResult.error) setError("Financial records loaded. Correction history is unavailable for this session.");
       setCorrections((correctionsResult.data ?? []) as RentCorrection[]);
       setPayments((paymentsResult.data ?? []) as Payment[]);
       setResidents((residentsResult.data ?? []) as GenericRow[]);
@@ -211,6 +216,16 @@ export default function PaymentsPage() {
       ),
     [bills]
   );
+
+  useEffect(() => {
+    if (loading) return;
+    const id = new URLSearchParams(window.location.search).get("billId");
+    if (!id) return;
+    const bill = billMap.get(id);
+    if (!bill) { setError("The selected bill could not be loaded; no other bill was selected."); return; }
+    setForm({ ...emptyForm, bill_id: id, resident_id: bill.residentId, amount: String(bill.balance), payment_status: "Pending" });
+    setEditingId(null); setShowForm(true);
+  }, [loading, billMap]);
 
   const filteredPayments = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -427,6 +442,10 @@ export default function PaymentsPage() {
     }
 
     const isVerified = form.payment_status === "Verified";
+    if (isVerified && !window.confirm(`Verify ${money(amount)} against ${staffPaymentLabel({ id: "new", resident_id: form.resident_id, bill_id: form.bill_id }, [], bills)}? This exact bill is selected; no other month will be substituted.`)) {
+      setSaving(false);
+      return;
+    }
 
     const payload = {
       payment_number: editingId ? undefined : createPaymentNumber(),
@@ -661,7 +680,7 @@ export default function PaymentsPage() {
 
                       return (
                         <option key={id} value={id}>
-                          {mapped?.billNumber ?? "Bill"} —{" "}
+                          {bill.bill_type === "Rent" ? rentPeriodLabel(bill.billing_month) : String(bill.bill_type || "Bill")} / {mapped?.billNumber ?? "Bill"} —{" "}
                           {residentMap.get(mapped?.residentId ?? "") ??
                             "Resident"}
                         </option>
@@ -905,12 +924,19 @@ export default function PaymentsPage() {
                     <tr key={payment.id} className="hover:bg-slate-50/70">
                       <td className="px-5 py-4">
                         <p className="font-semibold text-slate-900">
-                          {payment.payment_number ?? "No payment number"}
+                          {corrections.some(c => c.original_payment_id === payment.id) ? "Original payment" : corrections.some(c => c.replacement_payment_id === payment.id) ? "Replacement payment" : payment.payment_number ?? "No payment number"}
                         </p>
 
                         <p className="mt-1 text-xs text-slate-500">
                           {payment.payment_date}
                         </p>
+                        <details className="mt-2 text-xs"><summary className="cursor-pointer">Transaction details</summary>
+                          <p>Payment: {payment.payment_number} / {payment.id}</p>
+                          <p>Financial status: {payment.payment_status}</p>
+                          <p>Verified by: {payment.verified_by || "unavailable"} / At: {payment.verified_at || "unavailable"}</p>
+                          <p>{payment.notes}</p>
+                          {!corrections.some(c => c.original_payment_id === payment.id || c.replacement_payment_id === payment.id) && <PaymentAuditDetails paymentIds={[payment.id]} />}
+                        </details>
                       </td>
 
                       <td className="px-5 py-4 text-sm text-slate-700">
@@ -943,12 +969,13 @@ export default function PaymentsPage() {
                             payment.payment_status
                           )}`}
                         >
-                          {corrections.some(c => c.original_payment_id === payment.id) ? "Corrected / Reallocated" : payment.payment_status}
+                          {corrections.some(c => c.original_payment_id === payment.id) ? "Corrected" : payment.payment_status}
                         </span>
                       </td>
 
                       <td className="px-5 py-4">
                         <div className="flex flex-wrap gap-2">
+                          {(payment.payment_status === "Pending" || (payment.payment_status === "Verified" && !corrections.some(c => c.original_payment_id === payment.id || c.replacement_payment_id === payment.id))) && <StaffAllocationEditor paymentId={payment.id} correction={payment.payment_status === "Verified"} onSaved={() => void refresh()} />}
                           {payment.payment_status === "Pending" && (
                             <button
                               type="button"

@@ -1,4 +1,5 @@
 "use client";
+import BillPaymentActions from "@/components/payments/BillPaymentActions";
 
 import {
   FormEvent,
@@ -426,6 +427,8 @@ function BillingContent() {
 
   useEffect(() => {
     setTypeFilter(searchParams.get("type") || "Rent");
+    const id = searchParams.get("billId");
+    if (id) setSearch(id);
   }, [searchParams]);
 
   useEffect(() => {
@@ -477,6 +480,7 @@ function BillingContent() {
       );
 
       const searchable = [
+        bill.id,
         bill.bill_number,
         residentName(resident),
         bill.billing_month,
@@ -2741,6 +2745,7 @@ function BillingContent() {
 
                         <td className="px-5 py-4">
                           <div className="flex flex-wrap gap-2">
+                            {bill.bill_type === "Rent" && Number(bill.balance_amount) > 0 && bill.bill_status !== "Cancelled" && <BillPaymentActions billId={bill.id} month={bill.billing_month} />}
                             {!isEmailSent && bill.bill_status !== "Cancelled" && (
                               <button
                                 type="button"

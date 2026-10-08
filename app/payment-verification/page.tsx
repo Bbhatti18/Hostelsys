@@ -1,4 +1,6 @@
 "use client";
+import StaffAllocationEditor from "@/components/payments/StaffAllocationEditor";
+import { readStaffCorrections } from "@/lib/staffCorrectionHistory";
 import RentCorrectionContext, { type RentCorrection } from "@/components/payments/RentCorrectionContext";
 import { readDashboardRows } from "@/lib/dashboardRead";
 import { receiptDisplayStatus } from "@/lib/receiptDisplayStatus";
@@ -44,6 +46,7 @@ type PaymentReceipt = {
   notes: string | null;
   remarks: string | null;
   payment_id?: string | null;
+  late_fee_payment_allocations?: { payment_id: string }[];
   created_at: string;
 };
 
@@ -156,23 +159,24 @@ export default function PaymentVerificationPage() {
       followupsResult,
       correctionsResult,
     ] = await Promise.all([
-      readDashboardRows(supabase.from("payment_receipts").select("*").order("created_at", { ascending: false }).order("id")),
+      readDashboardRows(supabase.from("payment_receipts").select("*,late_fee_payment_allocations(payment_id)").order("created_at", { ascending: false }).order("id")),
       supabase.from("residents").select("*"),
       readDashboardRows(supabase.from("bills").select("*").order("id")),
       readDashboardRows(supabase.from("payments").select("id,resident_id,bill_id,amount,payment_status").order("id")),
       readDashboardRows(supabase.from("payment_allocations").select("payment_id,bill_id,amount").order("payment_id").order("bill_id")),
       supabase.rpc("payment_followup_data"),
-      readDashboardRows(supabase.from("rent_period_corrections").select("id,resident_id,admission_id,original_payment_id,replacement_payment_id,wrong_rent_bill_id").order("id")),
+      readStaffCorrections(),
     ]);
 
     const firstError =
       receiptsResult.error ||
       residentsResult.error ||
-      billsResult.error || paymentsResult.error || allocationsResult.error || followupsResult.error || correctionsResult.error;
+      billsResult.error || paymentsResult.error || allocationsResult.error || followupsResult.error;
 
     if (firstError) {
       setError(getSupabaseErrorMessage(firstError, "Payment receipts could not be loaded."));
     } else {
+      if (correctionsResult.error) setError("Payment receipts loaded. Correction history is unavailable for this session.");
       setCorrections((correctionsResult.data ?? []) as RentCorrection[]);
       setReceipts((receiptsResult.data ?? []) as PaymentReceipt[]);
       setResidents((residentsResult.data ?? []) as GenericRow[]);
@@ -477,6 +481,7 @@ export default function PaymentVerificationPage() {
                             <summary className="cursor-pointer text-xs font-semibold text-indigo-700">View Details{extra && displayStatus(receipt)==='Pending Verification' ? ' / Classify Additional Charges' : ''}</summary>
                             <div className="mt-2 max-h-96 space-y-2 overflow-y-auto break-words rounded-lg border bg-white p-3 text-sm">
                               <p>Receipt Verification: {receipt.status}</p>
+                              <p>Receipt verified by: {receipt.verified_by || "unavailable"} / At: {receipt.verified_at || "unavailable"}</p>
                               {displayStatus(receipt) === "Cancelled" && <p>Payment Status: Cancelled. This payment is not credited.</p>}
                               <p>Reference: {receipt.reference_number || '\u2014'}</p>
                               <p className="break-all">Admission: {firstText(bill,['admission_id']) || firstText(allocationBills[0],['admission_id']) || securityDepositAdmissionId(receipt.notes) || '\u2014'}</p>
@@ -557,13 +562,14 @@ export default function PaymentVerificationPage() {
                               displayStatus(receipt)
                             )}`}
                           >
-                            {corrections.some(c => c.original_payment_id === receipt.payment_id) ? "Corrected / Reallocated" : displayStatus(receipt)}
+                            {corrections.some(c => c.original_payment_id === receipt.payment_id) ? "Corrected" : displayStatus(receipt)}
                           </span>
                         </td>
 
                         <td className="px-3 py-3">
                           <div className="flex flex-wrap gap-2">
-                            {displayStatus(receipt) === "Pending Verification" && <button
+                            {displayStatus(receipt) === "Pending Verification" && !receipt.additional_charge && !receipt.late_fee_payment_allocations?.length && <StaffAllocationEditor paymentId={receipt.payment_id} receiptId={receipt.id} onSaved={() => void refresh()} />}
+                            {displayStatus(receipt) === "Pending Verification" && (receipt.additional_charge || !!receipt.late_fee_payment_allocations?.length) && <button
                               type="button"
                               disabled={updatingId === receipt.id}
                               onClick={() =>
