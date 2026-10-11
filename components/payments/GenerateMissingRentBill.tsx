@@ -33,7 +33,7 @@ export default function GenerateMissingRentBill({ admissionId, months, existingB
     catch (e) { setMessage(e instanceof Error ? e.message : "Preview failed."); } finally { setBusy(false); }
   }
   return <div className="mt-2 rounded border border-indigo-200 bg-indigo-50 p-3 text-xs">
-    {existing.length > 0 && <details open className="mb-2"><summary className="cursor-pointer">Existing rent bills — automatic generation blocked</summary>
+    {existing.length > 0 && <details className="mb-2"><summary className="cursor-pointer font-medium text-slate-700">Existing rent bills — automatic generation blocked</summary>
       {existing.map(b => <p key={String(b.id)} className="mt-1">{rentPeriodLabel(String(b.billing_month))}: Rent bill already exists for this month. Status: {String(b.bill_status ?? "Unknown")}. <Link href={`/billing?billId=${encodeURIComponent(String(b.id))}`} className="underline">{String(b.bill_number || b.id)}</Link>{b.bill_status === "Cancelled" && " — Replacement requires a separate explicitly authorized, audited workflow."}</p>)}
     </details>}
     {!billId && selected && <button type="button" disabled={busy} onClick={() => void load(selected)} className="rounded bg-indigo-700 px-3 py-2 font-semibold text-white">Generate Missing Rent Bill</button>}

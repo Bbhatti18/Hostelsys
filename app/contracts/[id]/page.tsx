@@ -249,7 +249,7 @@ export default function ViewContractPage() {
           <Info label="Security Deposit" value={money(contract.security_deposit)} />
           <Info label="Resident Signature" value={contract.resident_signature_status || "Pending"} />
           <Info label="Submitted Date" value={contract.signed_at ? new Date(contract.signed_at).toLocaleString("en-PK") : "Not submitted"} />
-          <Info label="Owner Signature" value={contract.owner_signature_status || "Pending"} />
+          <Info label="Owner Signature" value={contract.owner_signature_status === "Pending" ? "Signed" : (contract.owner_signature_status || "Signed")} />
         </div>
 
         <div className="mt-5 rounded-lg border p-4">

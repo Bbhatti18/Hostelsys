@@ -138,6 +138,7 @@ export async function proxy(request: NextRequest) {
     pathname === "/admin123" ||
     pathname === residentPasswordSetupPath ||
     pathname === adminPasswordSetupPath ||
+    pathname.startsWith("/api/resident-portal/") ||
     selfAuthenticatedApiPaths.has(pathname)
   ) {
     return response;

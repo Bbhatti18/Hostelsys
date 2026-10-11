@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import ResidentNoticePopup from "@/components/notices/ResidentNoticePopup";
+import ResidentDuesPopup from "@/components/resident/ResidentDuesPopup";
 import FinancialSummary from "@/components/resident/FinancialSummary";
 import PaymentHistory from "@/components/resident/PaymentHistory";
 import { supabase } from "@/lib/supabase";
@@ -316,6 +317,17 @@ export default function ResidentPortalPage() {
   return (
     <main className="min-h-screen bg-slate-50">
       <ResidentNoticePopup notices={notices} residentId={text(resident.id)} />
+      <ResidentDuesPopup
+        residentId={text(resident.id)}
+        residentName={residentName(resident)}
+        roomName={roomName(room)}
+        bedName={bedName(bed)}
+        admission={admission}
+        room={room}
+        bed={bed}
+        bills={bills}
+        payments={payments}
+      />
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-4 sm:gap-4 sm:px-6 sm:py-5 lg:px-8">
           <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
@@ -484,6 +496,12 @@ export default function ResidentPortalPage() {
                     "Resident Signature",
                     firstText(contract, ["resident_signature_url"]) ? "Signed" : "Pending",
                   ],
+                  [
+                    "Owner Signature",
+                    firstText(contract, ["owner_signature_status"]) === "Pending"
+                      ? "Signed"
+                      : firstText(contract, ["owner_signature_status"]) || "Signed",
+                  ],
                 ]}
               />
 
@@ -496,7 +514,9 @@ export default function ResidentPortalPage() {
                 href="/resident-portal/contract"
                 className="mt-5 inline-flex w-full justify-center rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white sm:w-auto"
               >
-                Review and Sign Contract
+                {firstText(contract, ["status"]) === "Active"
+                  ? "View Active Contract"
+                  : "Review and Sign Contract"}
               </Link>
             </Card>
           )}

@@ -291,6 +291,9 @@ function BillingContent() {
   const [selectedForApproval, setSelectedForApproval] = useState<string[]>([]);
   const [billEmailStatus, setBillEmailStatus] = useState<Record<string, string>>({});
   const [sendingEmailBillId, setSendingEmailBillId] = useState<string | null>(null);
+  const [showMissingBillsModal, setShowMissingBillsModal] = useState(false);
+  const [missingBillsSearch, setMissingBillsSearch] = useState("");
+  const [showOnlyNeedingBills, setShowOnlyNeedingBills] = useState(true);
   const editRequestId = useRef(0);
   const toastId = useRef(0);
 
@@ -570,6 +573,37 @@ function BillingContent() {
     () => selectedForApproval.filter((id) => pendingApprovalIds.includes(id)),
     [selectedForApproval, pendingApprovalIds],
   );
+
+  const missingRentAdmissions = useMemo(() => {
+    return admissions.filter(
+      (a) =>
+        isCurrentRentAdmission(a, admissions) &&
+        (missingRentMonths(a, bills).length > 0 ||
+          bills.some((b) => b.admission_id === a.id && b.bill_type === "Rent")) &&
+        residents.some((r) => r.id === a.resident_id && r.status !== "Archived"),
+    );
+  }, [admissions, bills, residents]);
+
+  const admissionsWithMissingBillsCount = useMemo(() => {
+    return missingRentAdmissions.filter((a) => missingRentMonths(a, bills).length > 0).length;
+  }, [missingRentAdmissions, bills]);
+
+  const filteredMissingAdmissions = useMemo(() => {
+    let list = missingRentAdmissions;
+    if (showOnlyNeedingBills) {
+      list = list.filter((a) => missingRentMonths(a, bills).length > 0);
+    }
+    if (missingBillsSearch.trim()) {
+      const q = missingBillsSearch.trim().toLowerCase();
+      list = list.filter((a) => {
+        const res = residents.find((r) => r.id === a.resident_id);
+        const name = text(res?.full_name).toLowerCase();
+        const code = text(res?.resident_code).toLowerCase();
+        return name.includes(q) || code.includes(q);
+      });
+    }
+    return list;
+  }, [missingRentAdmissions, showOnlyNeedingBills, missingBillsSearch, bills, residents]);
 
   const allPendingSelected =
     pendingApprovalIds.length > 0 &&
@@ -1608,14 +1642,6 @@ function BillingContent() {
   return (
     <main className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
-        {profile?.status?.toLowerCase() === "active" && ["admin", "super admin"].includes(role.toLowerCase()) && typeFilter !== "Security Deposit" && <section className="rounded-xl border border-indigo-200 bg-white p-4">
-          <h2 className="font-semibold">Missing Rent Bills</h2>
-          <p className="text-sm text-slate-600">Generate an exact missing period, including initial rent for Pending admissions.</p>
-          {admissions.filter(a => isCurrentRentAdmission(a, admissions) && (missingRentMonths(a, bills).length > 0 || bills.some(b => b.admission_id === a.id && b.bill_type === "Rent")) && residents.some(r => r.id === a.resident_id && r.status !== "Archived")).map(a => <div key={text(a.id)} className="mt-3">
-            <p className="text-sm font-medium">{text(residents.find(r => r.id === a.resident_id)?.full_name)} — Admission {text(a.admission_date)}</p>
-            <GenerateMissingRentBill admissionId={text(a.id)} months={missingRentMonths(a, bills)} existingBills={bills} onSaved={async generatedId => { setSearch(generatedId); setStatusFilter("Pending Approval"); setMonthFilter("All"); await refresh(); }} />
-          </div>)}
-        </section>}
         <section className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.2em] text-indigo-600">
@@ -1634,6 +1660,26 @@ function BillingContent() {
           </div>
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            {profile?.status?.toLowerCase() === "active" &&
+              ["admin", "super admin"].includes(role.toLowerCase()) &&
+              typeFilter !== "Security Deposit" && (
+                <button
+                  type="button"
+                  onClick={() => setShowMissingBillsModal(true)}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-5 py-3 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <span>Missing Rent Bills</span>
+                  {admissionsWithMissingBillsCount > 0 && (
+                    <span className="rounded-full bg-indigo-600 px-2 py-0.5 text-xs font-bold text-white">
+                      {admissionsWithMissingBillsCount}
+                    </span>
+                  )}
+                </button>
+              )}
+
             {typeFilter !== "Security Deposit" && (
               <button
                 type="button"
@@ -1661,6 +1707,127 @@ function BillingContent() {
             </button>
           </div>
         </section>
+
+        {/* Missing Rent Bills Modal Dialog */}
+        {showMissingBillsModal && (
+          <div
+            role="presentation"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 sm:p-6 backdrop-blur-xs"
+          >
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="missing-bills-modal-title"
+              className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900"
+            >
+              {/* Modal Header */}
+              <div className="flex items-center justify-between border-b border-slate-200 p-5 sm:p-6 dark:border-slate-800">
+                <div>
+                  <h2
+                    id="missing-bills-modal-title"
+                    className="text-xl font-bold text-slate-900 sm:text-2xl dark:text-white"
+                  >
+                    Missing Rent Bills Generator
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-500 sm:text-sm dark:text-slate-400">
+                    Generate an exact missing period, including initial rent for Pending admissions.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowMissingBillsModal(false)}
+                  className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                  aria-label="Close dialog"
+                >
+                  <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Modal Controls / Search & Filters */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-slate-50/60 p-4 sm:px-6 dark:border-slate-800 dark:bg-slate-800/40">
+                <div className="w-full sm:w-72">
+                  <input
+                    type="text"
+                    placeholder="Search resident name..."
+                    value={missingBillsSearch}
+                    onChange={(e) => setMissingBillsSearch(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs sm:text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={showOnlyNeedingBills}
+                      onChange={(e) => setShowOnlyNeedingBills(e.target.checked)}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span>Only show residents needing generation ({admissionsWithMissingBillsCount})</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Modal Body / Scrollable Content */}
+              <div className="flex-1 space-y-4 overflow-y-auto p-5 sm:p-6">
+                {filteredMissingAdmissions.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 p-8 text-center dark:border-slate-800">
+                    <p className="text-sm font-semibold text-slate-600 dark:text-slate-400">
+                      {missingBillsSearch
+                        ? "No matching residents found."
+                        : "No admissions currently require missing rent bill generation."}
+                    </p>
+                  </div>
+                ) : (
+                  filteredMissingAdmissions.map((a) => {
+                    const resident = residents.find((r) => r.id === a.resident_id);
+                    const months = missingRentMonths(a, bills);
+                    return (
+                      <div
+                        key={text(a.id)}
+                        className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs transition hover:border-indigo-200 dark:border-slate-800 dark:bg-slate-900"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2 dark:border-slate-800">
+                          <p className="font-bold text-slate-900 dark:text-white">
+                            {text(resident?.full_name || "Resident")}
+                            {resident?.resident_code ? ` (${text(resident.resident_code)})` : ""}
+                          </p>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
+                            Admission Date: {text(a.admission_date)}
+                          </span>
+                        </div>
+                        <GenerateMissingRentBill
+                          admissionId={text(a.id)}
+                          months={months}
+                          existingBills={bills}
+                          onSaved={async (generatedId) => {
+                            setSearch(generatedId);
+                            setStatusFilter("Pending Approval");
+                            setMonthFilter("All");
+                            setShowMissingBillsModal(false);
+                            await refresh();
+                          }}
+                        />
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="flex items-center justify-end border-t border-slate-200 p-4 sm:px-6 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowMissingBillsModal(false)}
+                  className="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                >
+                  Close
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
 
         {toasts.length > 0 && (
           <div

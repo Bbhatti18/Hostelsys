@@ -34,6 +34,8 @@ export async function POST(request: NextRequest) {
       .from("contracts")
       .update({
         status: "Active",
+        owner_signature_status: "Signed",
+        owner_signature_name: "Hostel Administration",
         updated_at: new Date().toISOString(),
       })
       .eq("id", context.contract.id)
@@ -42,7 +44,7 @@ export async function POST(request: NextRequest) {
       .eq("signed_at", context.contract.signed_at)
       .eq("signed_by_resident", true)
       .eq("contract_content", context.contract.contract_content)
-      .eq("resident_signature_status", "Approved");
+      .in("resident_signature_status", ["Approved", "Signed"]);
 
     contractActivation = previousContractStatus
       ? contractActivation.eq("status", previousContractStatus)

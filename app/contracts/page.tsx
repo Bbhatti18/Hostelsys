@@ -147,7 +147,7 @@ function statusClass(status: ContractStatus) {
 }
 
 function signatureClass(status: SignatureStatus) {
-  return status === "Approved"
+  return status === "Approved" || status === "Signed"
     ? "bg-emerald-100 text-emerald-700"
     : status === "Rejected" || status === "Re-sign Required"
       ? "bg-red-100 text-red-700"
@@ -1030,10 +1030,10 @@ export default function ContractsPage() {
 
                             <span
                               className={`w-fit rounded-full px-3 py-1 text-xs font-bold ${signatureClass(
-                                contract.owner_signature_status
+                                (contract.owner_signature_status === "Pending" ? "Signed" : (contract.owner_signature_status || "Signed")) as SignatureStatus
                               )}`}
                             >
-                              Owner: {contract.owner_signature_status}
+                              Owner: {contract.owner_signature_status === "Pending" ? "Signed" : (contract.owner_signature_status || "Signed")}
                             </span>
                           </div>
                         </td>

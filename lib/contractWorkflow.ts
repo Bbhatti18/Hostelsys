@@ -89,7 +89,7 @@ export function isResidentSignatureApproved(
 ) {
   return Boolean(
     contract &&
-      contract.resident_signature_status === "Approved" &&
+      ["Approved", "Signed"].includes(contract.resident_signature_status ?? "") &&
       hasResidentSignature(contract),
   );
 }

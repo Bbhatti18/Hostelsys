@@ -272,42 +272,30 @@ export default function ResidentContractPage() {
         signatureBlob,
         signatureFileName,
       );
-      const signedAt = new Date().toISOString();
-      let signatureUpdate = supabase
-        .from("contracts")
-        .update({
-          resident_signature_url: signatureUrl,
-          resident_signature_status: "Submitted",
-          signed_by_resident: true,
-          signed_at: signedAt,
-          updated_at: signedAt,
-        })
-        .eq("id", current.id)
-        .eq("resident_id", auth.resident.id)
-        .eq("admission_id", data.admission.id)
-        .eq("contract_content", current.contract_content)
-        .eq("resident_signature_status", signatureStatus);
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error("Please sign in to sign the contract.");
 
-      signatureUpdate = current.status
-        ? signatureUpdate.eq("status", current.status)
-        : signatureUpdate.is("status", null);
+      const response = await fetch("/api/resident-portal/contract/sign", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          contractId: current.id,
+          signatureUrl,
+        }),
+      });
 
-      const { data: signedContract, error: updateError } = await signatureUpdate
-        .select("id")
-        .maybeSingle();
-
-      if (updateError || !signedContract) {
-        throw new Error(
-          updateError
-            ? getSupabaseErrorMessage(updateError, "The signature was uploaded but could not be linked to the contract. Contact an administrator.")
-            : "The contract changed before signing completed. Refresh and try again.",
-        );
+      const result = await response.json().catch(() => null);
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || "Unable to sign this contract. Please try again.");
       }
-
 
       setAcceptedTerms(false);
       setSignatureFile(null);
-      setMessage("Signature submitted for staff approval. Your admission remains Pending.");
+      setMessage("Contract signed successfully! Your resident account and admission are now active.");
       await loadContract();
     } catch (signError) {
       setError(signError instanceof Error ? signError.message : "Unable to sign this contract.");
@@ -334,10 +322,17 @@ export default function ResidentContractPage() {
   const terms = getContractTerms(data.contract);
   const signed = hasResidentSignature(data.contract);
   const signatureStatus = data.contract.resident_signature_status || "Pending";
+  const isContractActive = data.contract.status === "Active" || data.admission.status === "Active";
   const canSubmitSignature =
-    data.admission.status === "Pending" && data.contract.status === "Pending Signature" &&
+    !isContractActive &&
+    data.admission.status === "Pending" &&
+    data.contract.status === "Pending Signature" &&
     ["Pending", "Re-sign Required"].includes(signatureStatus);
-  const displayStatus = signed && data.admission.status === "Pending" ? `${signatureStatus} — Awaiting Admin` : data.contract.status || "Pending Signature";
+  const displayStatus = isContractActive
+    ? "Active"
+    : signed && data.admission.status === "Pending"
+    ? "Signed"
+    : data.contract.status || "Pending Signature";
 
   return (
     <main className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
@@ -346,9 +341,17 @@ export default function ResidentContractPage() {
           <p className="text-sm font-semibold uppercase tracking-[0.2em] text-indigo-600">Hostel Management System</p>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
             <h1 className="text-2xl font-bold text-slate-900 sm:text-3xl">Resident Contract</h1>
-            <span className="rounded-full bg-amber-100 px-4 py-2 text-xs font-bold text-amber-800 sm:text-sm">{displayStatus}</span>
+            <span className={`rounded-full px-4 py-2 text-xs font-bold sm:text-sm ${
+              isContractActive ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+            }`}>
+              {displayStatus}
+            </span>
           </div>
-          <p className="mt-2 text-sm text-slate-500">Signing confirms acceptance of the terms. It does not activate your admission.</p>
+          <p className="mt-2 text-sm text-slate-500">
+            {isContractActive
+              ? "Your contract is signed and active. Your resident profile and admission are active."
+              : "Signing confirms acceptance of terms and activates your resident account and admission automatically."}
+          </p>
           <Link href="/resident-portal" className="mt-4 inline-flex text-sm font-semibold text-indigo-700 hover:underline">
             ← Back to portal
           </Link>
@@ -365,7 +368,8 @@ export default function ResidentContractPage() {
           <InfoCard label="Monthly Rent" value={money(data.contract.monthly_rent ?? data.admission.monthly_rent)} />
           <InfoCard label="Security Deposit" value={money(data.contract.security_deposit ?? data.admission.security_deposit)} />
           <InfoCard label="Notice Period" value={`${data.contract.notice_period_days || 30} days`} />
-          <InfoCard label="Resident Signature" value={signatureStatus} />
+          <InfoCard label="Resident Signature" value={signatureStatus === "Signed" ? "Signed" : signatureStatus} />
+          <InfoCard label="Owner Signature" value="Signed" />
         </section>
 
         <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
@@ -399,14 +403,51 @@ export default function ResidentContractPage() {
                 <span className="mt-2 block text-xs text-slate-500">PNG, JPG, or JPEG; maximum 5 MB.</span>
               </label>
             </div>
-            <button type="submit" disabled={saving || !terms} className="w-full rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto">{saving ? "Submitting Signature..." : "Submit Signature"}</button>
+            <button type="submit" disabled={saving || !terms} className="w-full rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto">{saving ? "Submitting Signature & Activating..." : "Sign Contract & Activate"}</button>
           </form>
         )}
 
-        {!canSubmitSignature && signed && (
-          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-            <h2 className="text-xl font-bold text-slate-900">Signature Submitted</h2>
-            <p className="mt-2 text-sm text-slate-600">Your signature can no longer be edited. Management must approve it or request a re-sign.</p>
+        {!canSubmitSignature && isContractActive && (
+          <section className="rounded-3xl border border-emerald-200 bg-emerald-50/50 p-5 shadow-sm sm:p-6">
+            <h2 className="text-xl font-bold text-emerald-900">Contract Signed & Active</h2>
+            <p className="mt-2 text-sm text-emerald-700">Your contract has been signed and your account is active. No owner signature is pending.</p>
+          </section>
+        )}
+
+        {!canSubmitSignature && signed && !isContractActive && (
+          <section className="rounded-3xl border border-amber-200 bg-amber-50 p-5 shadow-sm sm:p-6">
+            <h2 className="text-xl font-bold text-amber-900">Signature Recorded</h2>
+            <p className="mt-2 text-sm text-amber-700">Your signature is recorded. Click below to activate your account and contract immediately.</p>
+            <button
+              type="button"
+              onClick={async () => {
+                setSaving(true);
+                setError("");
+                setMessage("");
+                try {
+                  const { data: { session } } = await supabase.auth.getSession();
+                  const token = session?.access_token;
+                  if (!token) throw new Error("Please sign in to activate.");
+                  const res = await fetch("/api/resident-portal/contract/sign", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                    body: JSON.stringify({ contractId: data.contract.id, signatureUrl: data.contract.resident_signature_url || "signed" }),
+                  });
+                  const resData = await res.json().catch(() => null);
+                  if (!res.ok || !resData?.success) throw new Error(resData?.error || "Activation failed.");
+                  setMessage("Your account and contract are now active!");
+                  await loadContract();
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "Activation failed.");
+                } finally {
+                  setSaving(false);
+                }
+              }}
+              disabled={saving}
+              className="mt-4 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700"
+            >
+              {saving ? "Activating..." : "Activate Account Now"}
+            </button>
           </section>
         )}
       </div>
