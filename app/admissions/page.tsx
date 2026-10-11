@@ -525,7 +525,14 @@ export default function AdmissionsPage() {
     };
   }
 
-  async function activateAdmission(admissionId: string) {
+  async function activateAdmission(admissionId: string, manual = false) {
+    if (manual) {
+      const confirmed = window.confirm(
+        "Make this resident and admission Active? This will activate the resident account, set the admission status to Active, and allocate the bed.",
+      );
+      if (!confirmed) return;
+    }
+
     setLifecycleActionId(admissionId);
     setMessage("");
     setError("");
@@ -536,7 +543,7 @@ export default function AdmissionsPage() {
       const response = await fetch("/api/admissions/activate", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + data.session.access_token },
-        body: JSON.stringify({ admissionId }),
+        body: JSON.stringify({ admissionId, manual }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Unable to activate this admission.");
@@ -1316,21 +1323,20 @@ const rent = getAdmissionRent(admission, depositBills, depositPayments);
                                   </Link>
                                 )}
 
-                              {admission.status === "Pending" &&
-                                readyForActivation && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void activateAdmission(admission.id)
-                                    }
-                                    disabled={isLifecycleAction || isArchiving}
-                                    className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
-                                  >
-                                    {isLifecycleAction
-                                      ? "Activating..."
-                                      : "Activate Admission"}
-                                  </button>
-                                )}
+                              {admission.status === "Pending" && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void activateAdmission(admission.id, true)
+                                  }
+                                  disabled={isLifecycleAction || isArchiving}
+                                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-xs transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {isLifecycleAction
+                                    ? "Activating..."
+                                    : "Make Active"}
+                                </button>
+                              )}
 
                               {admission.status === "Pending" && !contract && (
                                 <Link

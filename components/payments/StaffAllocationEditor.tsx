@@ -50,7 +50,14 @@ export default function StaffAllocationEditor({ paymentId, receiptId, correction
     } catch (e) { setError(e instanceof Error ? e.message : "Allocation failed; reload before retrying."); } finally { setBusy(false); }
   }
   return <div className="text-xs">
-    <button type="button" disabled={busy} onClick={() => void open()} className="rounded border border-indigo-200 px-3 py-2 text-indigo-700">{correction ? "Correct Payment Allocation" : "Select Allocation / Verify"}</button>
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => void open()}
+      className="inline-flex items-center justify-center rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white shadow-xs transition hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {busy ? "Loading..." : "Select Allocation"}
+    </button>
     {error && <p role="alert" className="mt-2 text-red-700">{error}</p>}
     {message && <p role="status" className="mt-2">{message}</p>}
     {snapshot && <section className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 p-4" role="dialog" aria-modal="true" aria-label="Payment allocation">
@@ -72,7 +79,7 @@ export default function StaffAllocationEditor({ paymentId, receiptId, correction
         </details>}
         <label className="block"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} /> I confirm these exact periods and amounts. {correction ? "Reverse the original credit and create one audited replacement." : "Verify this payment once."}</label>
         {error && <p role="alert" className="text-red-700">{error}</p>}
-        <button type="button" disabled={busy || !confirmed || total !== Math.round(Number(snapshot.amount) * 100)} onClick={() => void save()} className="rounded bg-indigo-700 px-4 py-2 text-white">{busy ? "Saving…" : correction ? "Confirm Correction" : "Confirm Verification"}</button>
+        <button type="button" disabled={busy || !confirmed || total !== Math.round(Number(snapshot.amount) * 100)} onClick={() => void save()} className="rounded-lg bg-purple-600 px-4 py-2 font-semibold text-white shadow-xs transition hover:bg-purple-700 disabled:opacity-50">{busy ? "Saving…" : correction ? "Confirm Correction" : "Confirm Verification"}</button>
         <button type="button" disabled={busy} onClick={() => setSnapshot(null)} className="ml-3 rounded border px-4 py-2">Close</button>
       </div>
     </section>}

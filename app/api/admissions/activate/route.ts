@@ -11,10 +11,102 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
   if (typeof body?.admissionId !== "string" || !body.admissionId.trim()) return apiError("Admission ID is required.", 400);
   const admissionId = body.admissionId;
+  const isManual = Boolean(body.manual);
   try {
     const admissionResult = await supabaseAdmin.from("admissions").select("*").eq("id", admissionId).maybeSingle();
     if (admissionResult.error || !admissionResult.data) return apiError("Admission could not be loaded.", 404);
     const admission = admissionResult.data;
+
+    if (isManual) {
+      const now = new Date().toISOString();
+
+      // 1. Update admission status to Active
+      const { error: admError } = await supabaseAdmin
+        .from("admissions")
+        .update({ status: "Active", updated_at: now })
+        .eq("id", admissionId);
+      if (admError) throw admError;
+
+      // 2. Update resident status to Active
+      if (admission.resident_id) {
+        const { error: resError } = await supabaseAdmin
+          .from("residents")
+          .update({ status: "Active", updated_at: now })
+          .eq("id", admission.resident_id);
+        if (resError) throw resError;
+      }
+
+      // 3. Update bed status to Occupied
+      if (admission.bed_id) {
+        await supabaseAdmin
+          .from("beds")
+          .update({ status: "Occupied", updated_at: now })
+          .eq("id", admission.bed_id);
+      }
+
+      // 4. Update room occupancy
+      if (admission.room_id) {
+        try {
+          const { data: roomBeds } = await supabaseAdmin
+            .from("beds")
+            .select("id, status")
+            .eq("room_id", admission.room_id);
+          if (roomBeds) {
+            const occupiedCount = roomBeds.filter((b) => b.status === "Occupied").length;
+            const { data: currentRoom } = await supabaseAdmin
+              .from("rooms")
+              .select("id, total_beds, status")
+              .eq("id", admission.room_id)
+              .single();
+            if (currentRoom && !["Maintenance", "Inactive"].includes(currentRoom.status)) {
+              const nextStatus =
+                occupiedCount === 0
+                  ? "Available"
+                  : occupiedCount >= (currentRoom.total_beds || 1)
+                    ? "Occupied"
+                    : "Partially Occupied";
+              await supabaseAdmin
+                .from("rooms")
+                .update({
+                  occupied_beds: occupiedCount,
+                  status: nextStatus,
+                  updated_at: now,
+                })
+                .eq("id", admission.room_id);
+            }
+          }
+        } catch (roomErr) {
+          console.error("Room update error:", roomErr);
+        }
+      }
+
+      // 5. Update linked contract if exists
+      try {
+        const { data: existingContract } = await supabaseAdmin
+          .from("contracts")
+          .select("id, status")
+          .eq("admission_id", admissionId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (existingContract && existingContract.status !== "Active") {
+          await supabaseAdmin
+            .from("contracts")
+            .update({
+              status: "Active",
+              owner_signature_status: "Signed",
+              owner_signature_name: "Hostel Administration",
+              updated_at: now,
+            })
+            .eq("id", existingContract.id);
+        }
+      } catch (contractErr) {
+        console.error("Contract update warning:", contractErr);
+      }
+
+      return apiJson({ message: "Resident and admission have been manually activated successfully." });
+    }
     const [resident, room, bed, contract, admissions, bills, payments] = await Promise.all([
       supabaseAdmin.from("residents").select("id, status").eq("id", admission.resident_id).maybeSingle(),
       supabaseAdmin.from("rooms").select("id, status").eq("id", admission.room_id).maybeSingle(),
