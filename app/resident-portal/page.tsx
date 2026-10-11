@@ -7,6 +7,7 @@ import ResidentNoticePopup from "@/components/notices/ResidentNoticePopup";
 import ResidentDuesPopup from "@/components/resident/ResidentDuesPopup";
 import FinancialSummary from "@/components/resident/FinancialSummary";
 import PaymentHistory from "@/components/resident/PaymentHistory";
+import ContractTermsViewer from "@/components/contract/ContractTermsViewer";
 import { supabase } from "@/lib/supabase";
 import { normalizeBedLabel } from "@/lib/bedLabels";
 import {
@@ -506,8 +507,11 @@ export default function ResidentPortalPage() {
               />
 
               {firstText(contract, ["contract_content"]) && (
-                <div className="mt-5 rounded-2xl bg-slate-50 p-4 text-sm text-slate-700">
-                  {firstText(contract, ["contract_content"])}
+                <div className="mt-5">
+                  <ContractTermsViewer
+                    content={firstText(contract, ["contract_content"])}
+                    maxHeight="max-h-[500px]"
+                  />
                 </div>
               )}
               <Link

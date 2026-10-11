@@ -74,6 +74,45 @@ export async function POST(request: NextRequest) {
     // A concurrent submission may win. Its record stays unchanged; an unattached
     // private object is retained, never exposed via metadata or overwritten.
     if (registered.error) return reply({ error: registered.error.code === "P0001" ? registered.error.message : "Document could not be attached. Refresh before retrying." }, 409);
+
+    // When resident uploads a single document for CNIC, mirror it to the corresponding back slot
+    // to satisfy underlying database verification triggers and legacy record checks.
+    if (slot === "resident_front") {
+      try {
+        const mirrorPath = `${actor.residentId}/resident_back/${crypto.randomUUID()}.${extension}`;
+        const mirrorUpload = await supabaseAdmin.storage.from(bucket).upload(mirrorPath, bytes, { contentType: file.type, upsert: false, cacheControl: "0" });
+        if (!mirrorUpload.error) {
+          await supabaseAdmin.rpc("register_resident_profile_document", {
+            p_resident_id: actor.residentId,
+            p_slot: "resident_back",
+            p_path: mirrorPath,
+            p_content_type: file.type,
+            p_size: bytes.length,
+            p_actor_email: actor.email,
+          });
+        }
+      } catch {
+        // Non-critical mirror failure
+      }
+    } else if (slot === "guardian_front") {
+      try {
+        const mirrorPath = `${actor.residentId}/guardian_back/${crypto.randomUUID()}.${extension}`;
+        const mirrorUpload = await supabaseAdmin.storage.from(bucket).upload(mirrorPath, bytes, { contentType: file.type, upsert: false, cacheControl: "0" });
+        if (!mirrorUpload.error) {
+          await supabaseAdmin.rpc("register_resident_profile_document", {
+            p_resident_id: actor.residentId,
+            p_slot: "guardian_back",
+            p_path: mirrorPath,
+            p_content_type: file.type,
+            p_size: bytes.length,
+            p_actor_email: actor.email,
+          });
+        }
+      } catch {
+        // Non-critical mirror failure
+      }
+    }
+
     return reply({ saved: true, ...(actor.staff ? { canonicalValue: path } : {}) });
   } catch { return reply({ error: "Unable to upload document." }, 400); }
 }

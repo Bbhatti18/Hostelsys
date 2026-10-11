@@ -282,6 +282,22 @@ export default function ResidentPaymentsPage() {
     [depositBill, receipts, admission],
   );
 
+  const pendingAmount = useMemo(() => {
+    const pendingReceiptsAmt = receipts
+      .filter((receipt) => normalized(receipt.status) === "pending verification")
+      .reduce((sum, r) => sum + Number(r.amount || 0), 0);
+    const pendingPaymentsAmt = payments
+      .filter(
+        (payment) =>
+          normalized(payment.payment_status) === "pending" &&
+          !receipts.some(
+            (r) => r.payment_id === payment.id && normalized(r.status) === "pending verification",
+          ),
+      )
+      .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    return roundMoney(pendingReceiptsAmt + pendingPaymentsAmt);
+  }, [payments, receipts]);
+
   const summary = {
     outstanding: financial.totalOutstanding,
     pendingBills: regularBills.filter(bill => isPayableBill(bill.bill_status) && bill.outstanding > 0).length,
@@ -293,9 +309,10 @@ export default function ResidentPaymentsPage() {
   const paymentHistoryRows = useMemo(() => {
     const entries: { id: string; sortDate: string; row: React.ReactNode[] }[] = [];
     for (const payment of payments) {
-      if (normalized(payment.payment_status) !== "verified") continue;
+      if (normalized(payment.payment_status) === "cancelled") continue;
       const bill = bills.find((item) => item.id === payment.bill_id);
       const isDeposit = bill && isSecurityDepositBill(bill);
+      const isPending = normalized(payment.payment_status) === "pending";
       entries.push({
         id: `payment-${payment.id}`,
         sortDate: payment.payment_date || payment.created_at,
@@ -304,30 +321,34 @@ export default function ResidentPaymentsPage() {
           isDeposit
             ? `Security Deposit (${bill.bill_number})`
             : payment.notes?.match(/^Payment purpose:[ \t]*(.+)$/im)?.[1] || allocatedPaymentLabel(payment.allocations ?? [], bills) || bill?.bill_number || "Historical bill",
-          payment.payment_date,
+          payment.payment_date || payment.created_at?.slice(0, 10) || "—",
           money(payment.amount),
           payment.payment_method || "Payment Method",
           payment.reference_number ?? "—",
-          <Status key="status" value={payment.payment_status} />,
-          payment.payment_status,
+          <Status key="status" value={isPending ? "Pending Verification" : payment.payment_status} />,
+          isPending ? "Awaiting admin verification" : payment.payment_status,
           payment.notes ?? "—",
         ],
       });
     }
-    for (const receipt of verifiedDepositReceipts) {
+    for (const receipt of receipts) {
       if (receipt.payment_id && payments.some(payment => payment.id === receipt.payment_id)) continue;
-entries.push({
-        id: `deposit-${receipt.id}`,
+      if (normalized(receipt.status) === "cancelled") continue;
+      const bill = bills.find((item) => item.id === receipt.bill_id);
+      const isDeposit = (!receipt.bill_id && securityDepositAdmissionId(receipt.notes) === admission?.id) || (bill && isSecurityDepositBill(bill));
+      const isPending = normalized(receipt.status) === "pending verification";
+      entries.push({
+        id: `receipt-${receipt.id}`,
         sortDate: receipt.created_at,
         row: [
           "—",
-          "Security Deposit",
+          isDeposit ? "Security Deposit" : receipt.notes?.match(/^Payment purpose:[ \t]*(.+)$/im)?.[1] || bill?.bill_number || "Receipt submission",
           receipt.created_at.slice(0, 10),
           money(receipt.amount),
           receiptPaymentMethod(receipt.notes) || "Payment Method",
           receipt.reference_number ?? "—",
-          <Status key="status" value="Pending Verification" />,
-          "Needs payment reconciliation",
+          <Status key="status" value={receipt.status} />,
+          isPending ? "Awaiting admin verification" : receipt.status,
           residentReceiptNotes(receipt.notes) || "—",
         ],
       });
@@ -339,7 +360,7 @@ entries.push({
         return dateDifference || right.id.localeCompare(left.id);
       })
       .map((entry) => entry.row);
-  }, [bills, payments, verifiedDepositReceipts]);
+  }, [admission, bills, payments, receipts]);
 
   function selectBill(billId: string) {
     setWithAdditional(false);
@@ -702,9 +723,21 @@ entries.push({
         <details className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><summary className="cursor-pointer font-semibold text-slate-900">Previous Payment Receipts</summary><HistoricalEvidence /></details>
         <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-lg font-bold text-slate-900">Your Payment Summary</h2>
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">{[['Rent Due',money(financial.monthlyRentDue)],['Security Deposit Due',money(depositOutstanding)],['Total Payable',money(combined.total)],['Pending Verification',String(summary.pendingReceipts)]].map(([label,value])=><div key={label}><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-xl font-bold text-slate-900">{value}</p></div>)}</div>
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">{[['Rent Due',money(financial.monthlyRentDue)],['Security Deposit Due',money(depositOutstanding)],['Total Payable',money(combined.total)],['Pending Verification',money(pendingAmount)]].map(([label,value])=><div key={label}><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-xl font-bold text-slate-900">{value}</p></div>)}</div>
           <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 border-t pt-3 text-sm text-slate-500"><span>Verified Payments: {money(summary.verifiedPayments)}</span><span>All charges outstanding: {money(summary.outstanding)}</span></div>
         </section>
+
+        {pendingAmount > 0 && (
+          <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900 shadow-sm">
+            <div className="flex items-center gap-2 font-semibold">
+              <span className="flex h-2.5 w-2.5 rounded-full bg-amber-500 animate-pulse" />
+              <span>Pending Payment Awaiting Verification: {money(pendingAmount)}</span>
+            </div>
+            <p className="mt-1 text-xs text-amber-700">
+              Your payment has been recorded and submitted for administrator verification. Once verified by staff, your bill balance will update automatically.
+            </p>
+          </section>
+        )}
 
 
 
@@ -787,5 +820,5 @@ function Status({ value }: { value: string }) {
 }
 
 function HistoryTable({ title, headers, rows, loading, empty }: { title: string; headers: string[]; rows: React.ReactNode[][]; loading: boolean; empty: string }) {
-  return <details className="rounded-3xl border border-slate-200 bg-white shadow-sm"><summary className="cursor-pointer p-5 text-lg font-bold text-slate-900">{title}</summary><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-200"><thead className="bg-slate-50"><tr>{headers.map((header) => <th key={header} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">{header}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{loading ? <tr><td colSpan={headers.length} className="px-5 py-10 text-center text-sm text-slate-500">Loading...</td></tr> : rows.length === 0 ? <tr><td colSpan={headers.length} className="px-5 py-10 text-center text-sm text-slate-500">{empty}</td></tr> : rows.map((row, index) => <tr key={`${title}-${index}`}>{row.map((cell, cellIndex) => <td key={`${title}-${index}-${cellIndex}`} className="px-4 py-4 text-sm text-slate-700">{cell}</td>)}</tr>)}</tbody></table></div></details>;
+  return <details open className="rounded-3xl border border-slate-200 bg-white shadow-sm"><summary className="cursor-pointer p-5 text-lg font-bold text-slate-900">{title}</summary><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-200"><thead className="bg-slate-50"><tr>{headers.map((header) => <th key={header} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">{header}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{loading ? <tr><td colSpan={headers.length} className="px-5 py-10 text-center text-sm text-slate-500">Loading...</td></tr> : rows.length === 0 ? <tr><td colSpan={headers.length} className="px-5 py-10 text-center text-sm text-slate-500">{empty}</td></tr> : rows.map((row, index) => <tr key={`${title}-${index}`}>{row.map((cell, cellIndex) => <td key={`${title}-${index}-${cellIndex}`} className="px-4 py-4 text-sm text-slate-700">{cell}</td>)}</tr>)}</tbody></table></div></details>;
 }

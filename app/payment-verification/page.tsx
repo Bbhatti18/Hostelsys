@@ -568,34 +568,41 @@ export default function PaymentVerificationPage() {
 
                         <td className="px-3 py-3">
                           <div className="flex flex-wrap gap-2">
-                            {displayStatus(receipt) === "Pending Verification" && !receipt.additional_charge && !receipt.late_fee_payment_allocations?.length && <StaffAllocationEditor paymentId={receipt.payment_id} receiptId={receipt.id} onSaved={() => void refresh()} />}
-                            {displayStatus(receipt) === "Pending Verification" && (receipt.additional_charge || !!receipt.late_fee_payment_allocations?.length) && <button
-                              type="button"
-                              disabled={updatingId === receipt.id}
-                              onClick={() =>
-                                void updateReceiptStatus(
-                                  receipt,
-                                  "Verified"
-                                )
-                              }
-                              className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 disabled:opacity-50"
-                            >
-                              Verify
-                            </button>}
+                            {displayStatus(receipt) === "Pending Verification" && (
+                              <button
+                                type="button"
+                                disabled={updatingId === receipt.id}
+                                onClick={() =>
+                                  void updateReceiptStatus(
+                                    receipt,
+                                    "Verified"
+                                  )
+                                }
+                                className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+                              >
+                                {updatingId === receipt.id ? "Verifying..." : "Verify Receipt"}
+                              </button>
+                            )}
 
-                            {displayStatus(receipt) === "Pending Verification" && <button
-                              type="button"
-                              disabled={updatingId === receipt.id}
-                              onClick={() =>
-                                void updateReceiptStatus(
-                                  receipt,
-                                  "Rejected"
-                                )
-                              }
-                              className="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 disabled:opacity-50"
-                            >
-                              Reject
-                            </button>}
+                            {displayStatus(receipt) === "Pending Verification" && !receipt.additional_charge && !receipt.late_fee_payment_allocations?.length && (
+                              <StaffAllocationEditor paymentId={receipt.payment_id} receiptId={receipt.id} onSaved={() => void refresh()} />
+                            )}
+
+                            {displayStatus(receipt) === "Pending Verification" && (
+                              <button
+                                type="button"
+                                disabled={updatingId === receipt.id}
+                                onClick={() =>
+                                  void updateReceiptStatus(
+                                    receipt,
+                                    "Rejected"
+                                  )
+                                }
+                                className="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                              >
+                                Reject
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

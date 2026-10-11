@@ -200,7 +200,11 @@ export async function POST(request: NextRequest) {
     }
 
     let page = 1;
-    let existingUser = null as { id: string; email?: string } | null;
+    let existingUser = null as {
+      id: string;
+      email?: string;
+      user_metadata?: Record<string, any>;
+    } | null;
 
     while (page <= 20 && !existingUser) {
       const { data: usersData, error: usersError } =
@@ -220,15 +224,46 @@ export async function POST(request: NextRequest) {
       page += 1;
     }
 
+    const temporaryPassword = createTemporaryPassword();
+
     if (existingUser) {
-      return NextResponse.json({
-        created: false,
+      const { data: updatedUser, error: updateError } =
+        await supabaseAdmin.auth.admin.updateUserById(existingUser.id, {
+          password: temporaryPassword,
+          user_metadata: {
+            ...existingUser.user_metadata,
+            resident_id: resident.id,
+            full_name: resident.full_name,
+            account_type: "resident",
+            must_change_password: true,
+          },
+        });
+
+      if (updateError || !updatedUser.user) {
+        return jsonError(
+          `Existing portal account could not be updated: ${updateError?.message || "Update failed"}`,
+          500,
+        );
+      }
+
+      const emailDispatch = await sendResidentCredentialsEmail({
+        residentName: String(resident.full_name ?? "Resident"),
         email,
-        temporaryPassword: null,
+        temporaryPassword,
+        portalLoginUrl: portalLoginUrl(request),
+        isReset: true,
+      });
+
+      return NextResponse.json({
+        created: true,
+        email,
+        temporaryPassword,
+        emailSent: emailDispatch.sent,
+        emailProvider: emailDispatch.provider,
+        emailError: emailDispatch.error,
       });
     }
 
-    const temporaryPassword = createTemporaryPassword();
     const { data: createdUser, error: createError } =
       await supabaseAdmin.auth.admin.createUser({
         email,
@@ -245,11 +280,35 @@ export async function POST(request: NextRequest) {
     if (createError || !createdUser.user) {
       const message = createError?.message?.toLowerCase() ?? "";
       if (message.includes("already") || message.includes("registered")) {
-        return NextResponse.json({
-          created: false,
-          email,
-          temporaryPassword: null,
-        });
+        const { data: listData } = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+        const match = listData?.users.find((u) => u.email?.trim().toLowerCase() === email);
+        if (match) {
+          await supabaseAdmin.auth.admin.updateUserById(match.id, {
+            password: temporaryPassword,
+            user_metadata: {
+              ...match.user_metadata,
+              resident_id: resident.id,
+              full_name: resident.full_name,
+              account_type: "resident",
+              must_change_password: true,
+            },
+          });
+          const emailDispatch = await sendResidentCredentialsEmail({
+            residentName: String(resident.full_name ?? "Resident"),
+            email,
+            temporaryPassword,
+            portalLoginUrl: portalLoginUrl(request),
+            isReset: true,
+          });
+          return NextResponse.json({
+            created: true,
+            email,
+            temporaryPassword,
+            emailSent: emailDispatch.sent,
+            emailProvider: emailDispatch.provider,
+            emailError: emailDispatch.error,
+          });
+        }
       }
 
       console.error("[resident-login] Supabase Auth account creation failed.", createError);

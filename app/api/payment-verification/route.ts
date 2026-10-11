@@ -271,7 +271,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!bill.admission_id) return jsonError("Deposit bill requires its admission.", 409);
+    if (isSecurityDepositBill(bill) && !bill.admission_id) return jsonError("Deposit bill requires its admission.", 409);
     if (bill.admission_id) {
       const { data: admission, error: admissionError } = await supabaseAdmin
         .from("admissions")

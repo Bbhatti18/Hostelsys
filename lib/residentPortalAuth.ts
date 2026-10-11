@@ -18,13 +18,29 @@ export async function resolveAuthenticatedResident() {
     };
   }
 
-  const { data: resident, error: residentError } = await supabase
+  let resident: AuthenticatedResident | null = null;
+  const normalizedEmail = normalizeIdentityEmail(authData.user.email.trim().toLowerCase());
+
+  const { data: residentByEmail, error: residentError } = await supabase
     .from("residents")
     .select("id, email, full_name, status")
-    .eq("email", normalizeIdentityEmail(authData.user.email.trim().toLowerCase()))
+    .eq("email", normalizedEmail)
     .maybeSingle();
 
-  if (residentError) {
+  if (residentByEmail) {
+    resident = residentByEmail as AuthenticatedResident;
+  } else if (authData.user.user_metadata?.resident_id) {
+    const { data: residentById } = await supabase
+      .from("residents")
+      .select("id, email, full_name, status")
+      .eq("id", authData.user.user_metadata.resident_id)
+      .maybeSingle();
+    if (residentById) {
+      resident = residentById as AuthenticatedResident;
+    }
+  }
+
+  if (residentError && !resident) {
     return {
       resident: null,
       error: "Your resident profile could not be verified. Please try again.",

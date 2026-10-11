@@ -145,6 +145,7 @@ export default function PaymentsPage() {
   const [error, setError] = useState("");
 
   const [corrections, setCorrections] = useState<RentCorrection[]>([]);
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -592,6 +593,76 @@ export default function PaymentsPage() {
     setCancellingId(null);
   }
 
+  async function verifyPendingPayment(payment: Payment) {
+    if (payment.payment_status !== "Pending") return;
+    const confirmed = window.confirm(
+      `Verify payment ${payment.payment_number ?? ""} (${money(payment.amount)})? This will confirm the payment and update the bill balance.`
+    );
+    if (!confirmed) return;
+
+    setVerifyingId(payment.id);
+    setMessage("");
+    setError("");
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error("Your admin session could not be verified. Please sign in again.");
+
+      // Check if there is a linked receipt in payment_receipts
+      const { data: linkedReceipt } = await supabase
+        .from("payment_receipts")
+        .select("id, status")
+        .eq("payment_id", payment.id)
+        .maybeSingle();
+
+      if (linkedReceipt && linkedReceipt.status === "Pending Verification") {
+        const response = await fetch("/api/payment-verification", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            receiptId: linkedReceipt.id,
+            action: "Verify",
+          }),
+        });
+        const payload = (await response.json().catch(() => null)) as { message?: string; error?: string } | null;
+        if (!response.ok) throw new Error(payload?.error || "The receipt verification request failed.");
+        setMessage(payload?.message || "Payment verified successfully.");
+      } else {
+        const userEmail = session.user?.email || "Admin";
+        const { error: updateError } = await supabase
+          .from("payments")
+          .update({
+            payment_status: "Verified",
+            verified: true,
+            verified_by: userEmail,
+            verified_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", payment.id)
+          .eq("payment_status", "Pending");
+        if (updateError) throw new Error(updateError.message);
+
+        if (payment.bill_id) {
+          try {
+            await refreshBillFinancials(payment.bill_id);
+          } catch {
+            // Bill balance refresh warning non-blocking
+          }
+        }
+        setMessage("Payment verified successfully.");
+      }
+      await refresh();
+    } catch (verifyError) {
+      setError(verifyError instanceof Error ? verifyError.message : "Failed to verify payment.");
+    } finally {
+      setVerifyingId(null);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -975,6 +1046,16 @@ export default function PaymentsPage() {
 
                       <td className="px-5 py-4">
                         <div className="flex flex-wrap gap-2">
+                          {payment.payment_status === "Pending" && (
+                            <button
+                              type="button"
+                              disabled={verifyingId === payment.id}
+                              onClick={() => void verifyPendingPayment(payment)}
+                              className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+                            >
+                              {verifyingId === payment.id ? "Verifying..." : "Verify"}
+                            </button>
+                          )}
                           {(payment.payment_status === "Pending" || (payment.payment_status === "Verified" && !corrections.some(c => c.original_payment_id === payment.id || c.replacement_payment_id === payment.id))) && <StaffAllocationEditor paymentId={payment.id} correction={payment.payment_status === "Verified"} onSaved={() => void refresh()} />}
                           {payment.payment_status === "Pending" && (
                             <button

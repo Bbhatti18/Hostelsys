@@ -15,10 +15,19 @@ export function documentSlotsForIdentityType(slots: readonly DocumentSlot[], res
     !(slot === "guardian_back" && guardianType === "Passport"),
   );
 }
-export const MAX_PROFILE_DOCUMENT_BYTES = 4 * 1024 * 1024;
+export const portalDocumentSlots = ["photo", "resident_front", "guardian_front"] as const;
+
+export function documentDisplayTitle(slot: DocumentSlot, residentType = "CNIC", guardianType = "CNIC") {
+  if (slot === "photo") return "Resident Profile Photo";
+  if (slot === "resident_front") return residentType === "Passport" ? "Resident Passport Identity Page" : "Resident CNIC (Front + Back)";
+  if (slot === "guardian_front") return guardianType === "Passport" ? "Guardian Passport Identity Page" : "Guardian CNIC (Front + Back)";
+  return documentLabel(slot, residentType, guardianType);
+}
+
+export const MAX_PROFILE_DOCUMENT_BYTES = 400 * 1024;
 export function profileDocumentError(slot: string, type: string, size: number, bytes?: Uint8Array) {
   if (!documentSlots.includes(slot as DocumentSlot)) return "Unknown document type.";
-  if (size <= 0 || size > MAX_PROFILE_DOCUMENT_BYTES) return "Each file must be no larger than 4 MB.";
+  if (size <= 0 || size > MAX_PROFILE_DOCUMENT_BYTES) return "Each file must be no larger than 400 KB.";
   if (!["image/jpeg", "image/png", "image/webp", ...(slot === "photo" ? [] : ["application/pdf"])].includes(type)) return "Use JPEG, PNG or WebP; identity documents also accept PDF.";
   if (bytes) {
     const prefix = (values: number[]) => values.every((value, index) => bytes[index] === value);

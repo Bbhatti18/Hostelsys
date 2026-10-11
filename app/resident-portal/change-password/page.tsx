@@ -17,6 +17,7 @@ export default function ResidentChangePasswordPage() {
     async function prepareRecoverySession() {
       const searchParams = new URLSearchParams(window.location.search);
       const tokenHash = searchParams.get("token_hash");
+      const code = searchParams.get("code");
       const type = searchParams.get("type");
       if (tokenHash && type === "recovery") {
         const { error: verificationError } = await supabase.auth.verifyOtp({
@@ -24,6 +25,12 @@ export default function ResidentChangePasswordPage() {
           type: "recovery",
         });
         if (verificationError) {
+          if (active) setError("This password setup link is invalid or has expired. Ask the hostel administrator for a new link.");
+          return;
+        }
+      } else if (code) {
+        const { error: codeError } = await supabase.auth.exchangeCodeForSession(code);
+        if (codeError) {
           if (active) setError("This password setup link is invalid or has expired. Ask the hostel administrator for a new link.");
           return;
         }

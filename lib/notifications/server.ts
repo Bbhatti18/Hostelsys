@@ -64,7 +64,10 @@ function displayDate(value: unknown) {
 }
 
 function siteUrl() {
-  return text(process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL).replace(/\/$/, "");
+  const envUrl = text(process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || process.env.SITE_URL || "");
+  if (envUrl) return envUrl.replace(/\/$/, "");
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`.replace(/\/$/, "");
+  return "";
 }
 
 function portalUrl(path = "") {
@@ -335,10 +338,8 @@ async function resolveLoginDetails(entityId: string) {
   const email = text(resident.email).toLowerCase();
   if (!email) throw new Error("recipient_unavailable");
 
-  const configuredSiteUrl = siteUrl();
-  const options = configuredSiteUrl
-    ? { redirectTo: `${configuredSiteUrl}/resident-portal/change-password` }
-    : undefined;
+  const configuredSiteUrl = siteUrl() || "http://localhost:3000";
+  const options = { redirectTo: `${configuredSiteUrl}/resident-portal/change-password` };
   const { data: linkData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
     type: "recovery",
     email,

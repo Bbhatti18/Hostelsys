@@ -151,62 +151,79 @@ export async function POST(request: NextRequest) {
     if (usersError) {
       return jsonError("The resident portal account could not be checked.", 500);
     }
-    if (matches.length === 0) {
-      return jsonError(
-        "No portal account exists for this resident. Create the portal account first.",
-        404,
-      );
-    }
-    if (matches.length !== 1) {
-      return jsonError(
-        "Multiple portal accounts match this resident email. Resolve the account conflict before resetting the password.",
-        409,
-      );
-    }
+    const temporaryPassword = createTemporaryPassword();
+    let authUser = matches[0] ?? null;
 
-    const authUser = matches[0];
-    const linkedResidentId =
-      typeof authUser.user_metadata?.resident_id === "string"
-        ? authUser.user_metadata.resident_id.trim()
-        : "";
-    const accountType = String(
-      authUser.user_metadata?.account_type ?? "",
-    ).trim().toLowerCase();
+    if (!authUser) {
+      const { data: created, error: createError } = await supabaseAdmin.auth.admin.createUser({
+        email,
+        password: temporaryPassword,
+        email_confirm: true,
+        user_metadata: {
+          resident_id: resident.id,
+          full_name: resident.full_name,
+          account_type: "resident",
+          must_change_password: true,
+        },
+      });
 
-    if (accountType && accountType !== "resident") {
-      return jsonError(
-        "The matching auth account belongs to a different account type and cannot be relinked automatically.",
-        409,
-      );
-    }
-
-    if (linkedResidentId !== resident.id || accountType !== "resident") {
-      const { error: mappingError } =
-        await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
-          user_metadata: {
-            ...authUser.user_metadata,
-            resident_id: resident.id,
-            full_name: resident.full_name,
-            account_type: "resident",
-          },
-        });
-
-      if (mappingError) {
+      if (createError || !created.user) {
         return jsonError(
-          "The resident portal account mapping could not be repaired.",
+          `Unable to create a portal account for this resident: ${createError?.message || "Creation failed"}`,
           500,
         );
       }
-    }
+      authUser = created.user;
+    } else {
+      if (matches.length > 1) {
+        return jsonError(
+          "Multiple portal accounts match this resident email. Resolve the account conflict before resetting the password.",
+          409,
+        );
+      }
 
-    const temporaryPassword = createTemporaryPassword();
-    const { data: updatedUser, error: updateError } =
-      await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
-        password: temporaryPassword,
-      });
+      const linkedResidentId =
+        typeof authUser.user_metadata?.resident_id === "string"
+          ? authUser.user_metadata.resident_id.trim()
+          : "";
+      const accountType = String(
+        authUser.user_metadata?.account_type ?? "",
+      ).trim().toLowerCase();
 
-    if (updateError || !updatedUser.user) {
-      return jsonError("The resident portal password could not be reset.", 500);
+      if (accountType && accountType !== "resident") {
+        return jsonError(
+          "The matching auth account belongs to a different account type and cannot be relinked automatically.",
+          409,
+        );
+      }
+
+      if (linkedResidentId !== resident.id || accountType !== "resident") {
+        const { error: mappingError } =
+          await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+            user_metadata: {
+              ...authUser.user_metadata,
+              resident_id: resident.id,
+              full_name: resident.full_name,
+              account_type: "resident",
+            },
+          });
+
+        if (mappingError) {
+          return jsonError(
+            "The resident portal account mapping could not be repaired.",
+            500,
+          );
+        }
+      }
+
+      const { data: updatedUser, error: updateError } =
+        await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+          password: temporaryPassword,
+        });
+
+      if (updateError || !updatedUser.user) {
+        return jsonError("The resident portal password could not be reset.", 500);
+      }
     }
 
     const emailDispatch = await sendResidentCredentialsEmail({

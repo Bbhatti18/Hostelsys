@@ -53,19 +53,29 @@ export async function GET(request: NextRequest) {
         ? user.user_metadata.resident_id.trim()
         : "";
 
-    let residentQuery = supabaseAdmin
-      .from("residents")
-      .select("id, email, full_name, status, phone, cnic, permanent_address")
-      .eq("email", normalizeIdentityEmail(email));
+    let resident = null;
     if (metadataResidentId) {
-      residentQuery = residentQuery.eq("id", metadataResidentId);
+      const { data: resById } = await supabaseAdmin
+        .from("residents")
+        .select("id, email, full_name, status, phone, cnic, permanent_address")
+        .eq("id", metadataResidentId)
+        .maybeSingle();
+      if (resById) {
+        resident = resById;
+      }
     }
 
-    const { data: resident, error: residentError } =
-      await residentQuery.maybeSingle();
+    if (!resident) {
+      const { data: resByEmail, error: residentError } = await supabaseAdmin
+        .from("residents")
+        .select("id, email, full_name, status, phone, cnic, permanent_address")
+        .eq("email", normalizeIdentityEmail(email))
+        .maybeSingle();
 
-    if (residentError) {
-      return jsonError("Your resident profile could not be verified.", 500);
+      if (residentError) {
+        return jsonError("Your resident profile could not be verified.", 500);
+      }
+      resident = resByEmail;
     }
     if (!resident) {
       return jsonError("No resident profile is linked to this account.", 403);

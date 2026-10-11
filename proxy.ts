@@ -101,12 +101,15 @@ function createServerClient(request: NextRequest, response: NextResponse) {
   });
 }
 
-async function getUserRole(supabase: SupabaseClient, email: string | undefined) {
-  if (!email) {
+async function getUserRole(
+  supabase: SupabaseClient,
+  user: { email?: string; user_metadata?: Record<string, any> } | null | undefined
+) {
+  if (!user?.email) {
     return null;
   }
 
-  const normalizedEmail = email.toLowerCase();
+  const normalizedEmail = user.email.toLowerCase();
 
   const { data: staffUser } = await supabase
     .from("staff_users")
@@ -120,13 +123,30 @@ async function getUserRole(supabase: SupabaseClient, email: string | undefined) 
 
   const { data: residentUser } = await supabase
     .from("residents")
-    .select("email, status")
+    .select("id, email, status")
     .eq("email", normalizeIdentityEmail(normalizedEmail))
     .maybeSingle();
 
-  return residentUser?.email && String(residentUser.status ?? "").trim().toLowerCase() !== "archived"
-    ? ("resident" as const)
-    : null;
+  if (residentUser?.email && String(residentUser.status ?? "").trim().toLowerCase() !== "archived") {
+    return "resident" as const;
+  }
+
+  const metadataResidentId =
+    typeof user.user_metadata?.resident_id === "string" ? user.user_metadata.resident_id.trim() : "";
+
+  if (metadataResidentId) {
+    const { data: residentById } = await supabase
+      .from("residents")
+      .select("id, email, status")
+      .eq("id", metadataResidentId)
+      .maybeSingle();
+
+    if (residentById?.id && String(residentById.status ?? "").trim().toLowerCase() !== "archived") {
+      return "resident" as const;
+    }
+  }
+
+  return null;
 }
 
 export async function proxy(request: NextRequest) {
@@ -138,6 +158,11 @@ export async function proxy(request: NextRequest) {
     pathname === "/admin123" ||
     pathname === residentPasswordSetupPath ||
     pathname === adminPasswordSetupPath ||
+    pathname === "/auth/callback" ||
+    pathname === "/reset-password" ||
+    pathname === "/change-password" ||
+    pathname === "/forgot-password" ||
+    pathname === "/resident-login" ||
     pathname.startsWith("/api/resident-portal/") ||
     selfAuthenticatedApiPaths.has(pathname)
   ) {
@@ -153,7 +178,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL(loginPath, request.url));
   }
 
-  const role = await getUserRole(supabase, user.email);
+  const role = await getUserRole(supabase, user);
 
   if (isAdminRoute(pathname)) {
     if (role === "staff") {

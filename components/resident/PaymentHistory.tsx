@@ -19,6 +19,11 @@ function statusClass(status: ResidentPaymentStatus) {
 export default function PaymentHistory({ admission, room, bed, bills, payments, receipts, onViewFinancialSummary }: { admission: FinancialRow | null; room: FinancialRow | null; bed: FinancialRow | null; bills: FinancialRow[]; payments: FinancialRow[]; receipts: FinancialRow[]; onViewFinancialSummary: () => void }) {
   const { entries, summary } = useMemo(() => buildResidentPaymentHistory({ bills, payments, receipts }), [bills, payments, receipts]);
   const financial = useMemo(() => buildResidentFinancialSummary({ admission, room, bed, bills, payments }), [admission, bed, bills, payments, room]);
+  const pendingAmount = useMemo(() => {
+    return entries
+      .filter((entry) => entry.status === "Pending")
+      .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+  }, [entries]);
   const [downloading, setDownloading] = useState("");
   const [downloadError, setDownloadError] = useState("");
 
@@ -64,6 +69,18 @@ export default function PaymentHistory({ admission, room, bed, bills, payments, 
         <SummaryCard label="Last Payment" value={summary.lastPaymentDate || "No payments"} note={summary.lastPaymentDate ? money(summary.lastPaymentAmount) : "No completed payment yet"} />
         <article className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5"><p className="text-sm font-semibold text-indigo-700">Outstanding Balance</p><p className="mt-2 text-2xl font-black text-indigo-950">{money(financial.totalOutstanding)}</p><button type="button" onClick={onViewFinancialSummary} className="mt-2 inline-flex text-xs font-bold text-indigo-700 hover:text-indigo-900">View Financial Summary →</button></article>
       </div>
+
+      {pendingAmount > 0 && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900 shadow-sm">
+          <div className="flex items-center gap-2 font-semibold">
+            <span className="flex h-2.5 w-2.5 rounded-full bg-amber-500 animate-pulse" />
+            <span>Pending Verification: {money(pendingAmount)}</span>
+          </div>
+          <p className="mt-1 text-xs text-amber-700">
+            You have submitted payment(s) awaiting staff verification. Once approved, your total paid and balance will update automatically.
+          </p>
+        </div>
+      )}
 
       {downloadError && <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{downloadError}</div>}
 
