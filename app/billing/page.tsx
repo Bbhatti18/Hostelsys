@@ -1,5 +1,4 @@
 "use client";
-import BillPaymentActions from "@/components/payments/BillPaymentActions";
 
 import {
   FormEvent,
@@ -21,7 +20,6 @@ import {
   refreshBillFinancials,
 } from "@/lib/financials";
 import { getSupabaseErrorMessage } from "@/lib/supabaseErrors";
-import { paymentBillAmounts } from "@/lib/paymentAllocations";
 import {
   notificationWarning,
   requestEventNotification,
@@ -85,6 +83,10 @@ type Bill = {
   notes: string | null;
   created_at: string;
   updated_at: string;
+  remaining_payment_date?: string | null;
+  remaining_payment_amount?: number | null;
+  remaining_payment_note?: string | null;
+  remaining_payment_status?: string | null;
 };
 
 type BillForm = {
@@ -342,34 +344,44 @@ function BillingContent() {
     setLoading(true);
     setError("");
 
-    const [billsResult, residentsResult, admissionsResult, roomsResult, acBillsResult, paymentsResult, receiptsResult, loadedMeterConfig] =
-      await Promise.all([
-        supabase
-          .from("bills")
-          .select("*")
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("residents")
-          .select("*")
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("admissions")
-          .select("*")
-          .order("created_at", { ascending: false }),
-        supabase.from("rooms").select("id, room_number, status"),
-        supabase
-          .from("ac_bills")
-          .select(acBillColumns)
-          .order("billing_month", { ascending: false }),
-        supabase
-          .from("payments")
-          .select("id, bill_id, resident_id, payment_number, payment_date, amount, payment_status, reference_number, payment_allocations(payment_id,bill_id,amount)")
-          .order("payment_date", { ascending: false }),
-        supabase
-          .from("payment_receipts")
-          .select("id, bill_id, payment_id, resident_id, status, receipt_url, amount, created_at"),
-        getMeterReadingConfig(supabase),
-      ]);
+    const [
+      billsResult,
+      residentsResult,
+      admissionsResult,
+      roomsResult,
+      acBillsResult,
+      paymentsResult,
+      receiptsResult,
+      followupsResult,
+      loadedMeterConfig,
+    ] = await Promise.all([
+      supabase
+        .from("bills")
+        .select("*")
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("residents")
+        .select("*")
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("admissions")
+        .select("*")
+        .order("created_at", { ascending: false }),
+      supabase.from("rooms").select("id, room_number, status"),
+      supabase
+        .from("ac_bills")
+        .select(acBillColumns)
+        .order("billing_month", { ascending: false }),
+      supabase
+        .from("payments")
+        .select("id, bill_id, resident_id, payment_number, payment_date, amount, payment_status, reference_number, payment_allocations(payment_id,bill_id,amount)")
+        .order("payment_date", { ascending: false }),
+      supabase
+        .from("payment_receipts")
+        .select("id, bill_id, payment_id, resident_id, status, receipt_url, amount, created_at"),
+      supabase.rpc("payment_followup_data"),
+      getMeterReadingConfig(supabase),
+    ]);
 
     const firstError =
       billsResult.error ||
@@ -383,40 +395,118 @@ function BillingContent() {
     if (firstError) {
       setError(getSupabaseErrorMessage(firstError, "Billing records could not be loaded."));
     } else {
+      const followupsData = Array.isArray(followupsResult.data) ? followupsResult.data : [];
+      const followupsByBill = new Map<string, {
+        remaining_payment_date: string | null;
+        remaining_payment_amount: number | null;
+        remaining_payment_note: string | null;
+        remaining_payment_status: string | null;
+      }>();
+
+      for (const item of followupsData) {
+        const billId = text(item.bill_id);
+        if (!billId) continue;
+        const followupsList = Array.isArray(item.followups) ? item.followups : [];
+        const commitment =
+          followupsList.find((f: GenericRow) => f.kind === "commitment" && f.status !== "Resolved") ||
+          followupsList.find((f: GenericRow) => f.kind === "commitment") ||
+          followupsList[0];
+
+        if (commitment) {
+          followupsByBill.set(billId, {
+            remaining_payment_date: text(commitment.due_date) || null,
+            remaining_payment_amount: numberValue(commitment.amount) || null,
+            remaining_payment_note: text(commitment.note) || null,
+            remaining_payment_status: text(commitment.status) || null,
+          });
+        }
+      }
+
       const verifiedByBill = new Map<string, number>();
       const pendingByBill = new Map<string, number>();
+
       for (const payment of paymentsResult.data ?? []) {
         const isVerified = payment.payment_status === "Verified";
         const isPending = payment.payment_status === "Pending";
         if (!isVerified && !isPending) continue;
 
         const targetMap = isVerified ? verifiedByBill : pendingByBill;
-        for (const allocation of paymentBillAmounts(payment, payment.payment_allocations ?? [])) {
+        const allocs = (Array.isArray(payment.payment_allocations) && payment.payment_allocations.length > 0)
+          ? payment.payment_allocations
+          : payment.bill_id
+          ? [{ bill_id: payment.bill_id, amount: Number(payment.amount || 0) }]
+          : [];
+
+        for (const allocation of allocs) {
           const billId = text(allocation.bill_id);
           if (!billId) continue;
           targetMap.set(billId, roundMoney((targetMap.get(billId) ?? 0) + numberValue(allocation.amount)));
         }
       }
+
+      // Check unlinked receipts pending verification
+      for (const receipt of receiptsResult.data ?? []) {
+        if (receipt.status === "Pending Verification" && receipt.bill_id && !receipt.payment_id) {
+          const billId = text(receipt.bill_id);
+          pendingByBill.set(billId, roundMoney((pendingByBill.get(billId) ?? 0) + numberValue(receipt.amount)));
+        }
+      }
+
+      // Reconcile with followups RPC numbers
+      for (const item of followupsData) {
+        const billId = text(item.bill_id);
+        if (!billId) continue;
+        if (numberValue(item.pending) > 0 && !(pendingByBill.get(billId) ?? 0)) {
+          pendingByBill.set(billId, numberValue(item.pending));
+        }
+        if (numberValue(item.verified) > 0 && !(verifiedByBill.get(billId) ?? 0)) {
+          verifiedByBill.set(billId, numberValue(item.verified));
+        }
+      }
+
       setBills(
         ((billsResult.data ?? []) as Bill[]).map((bill) => {
           const paid = verifiedByBill.get(bill.id) ?? 0;
           const pending = pendingByBill.get(bill.id) ?? 0;
-          const balance = Math.max(roundMoney(numberValue(bill.total_amount) - paid), 0);
+          const total = numberValue(bill.total_amount);
+          const balance = Math.max(roundMoney(total - paid), 0);
+          const followup = followupsByBill.get(bill.id);
+
           const currentStatus =
             normalizedStatus(bill.bill_status) === "cancelled"
               ? "Cancelled"
               : bill.bill_status;
+
+          let computedStatus: BillStatus;
+          if (currentStatus === "Cancelled") {
+            computedStatus = "Cancelled";
+          } else if (isUnapprovedBill(currentStatus)) {
+            computedStatus = currentStatus as BillStatus;
+          } else if (total > 0 && balance === 0) {
+            computedStatus = "Paid";
+          } else if (paid > 0 && balance > 0) {
+            computedStatus = "Partially Paid";
+          } else if (pending > 0 && pending < total) {
+            computedStatus = "Partially Paid";
+          } else {
+            computedStatus = deriveBillStatus(
+              total,
+              paid,
+              bill.due_date,
+              currentStatus,
+            );
+          }
+
           return {
             ...bill,
             paid_amount: paid,
             pending_amount: pending,
             balance_amount: balance,
-            bill_status: deriveBillStatus(
-              numberValue(bill.total_amount),
-              paid,
-              bill.due_date,
-              currentStatus,
-            ),
+            bill_status: computedStatus,
+            remaining_payment_date: followup?.remaining_payment_date ?? null,
+            remaining_payment_amount: followup?.remaining_payment_amount ?? null,
+            remaining_payment_note: followup?.remaining_payment_note ?? null,
+            remaining_payment_status: followup?.remaining_payment_status ?? null,
           };
         }),
       );
@@ -494,6 +584,8 @@ function BillingContent() {
         bill.bill_number,
         residentName(resident),
         bill.billing_month,
+        bill.remaining_payment_date ?? "",
+        bill.remaining_payment_note ?? "",
       ]
         .join(" ")
         .toLowerCase();
@@ -501,9 +593,24 @@ function BillingContent() {
       const matchesSearch =
         !query || searchable.includes(query);
 
+      const isPartiallyPaid =
+        bill.bill_status === "Partially Paid" ||
+        (Number(bill.paid_amount) > 0 && Number(bill.balance_amount) > 0) ||
+        (Number(bill.pending_amount) > 0 && Number(bill.pending_amount) < Number(bill.total_amount)) ||
+        (Boolean(bill.remaining_payment_date) && Number(bill.balance_amount) > 0);
+
+      const isCompletelyPaid =
+        bill.bill_status === "Paid" ||
+        (Number(bill.balance_amount) <= 0 && Number(bill.total_amount) > 0) ||
+        (Number(bill.paid_amount) >= Number(bill.total_amount) && Number(bill.total_amount) > 0);
+
       const matchesStatus =
         statusFilter === "All" ||
-        bill.bill_status === statusFilter;
+        (statusFilter === "Partially Paid"
+          ? isPartiallyPaid
+          : statusFilter === "Paid"
+          ? isCompletelyPaid
+          : bill.bill_status === statusFilter);
 
       const matchesMonth =
         monthFilter === "All" || bill.billing_month === monthFilter;
@@ -763,6 +870,58 @@ function BillingContent() {
   const [verifyingReceipt, setVerifyingReceipt] = useState<GenericRow | null>(null);
   const [receiptSignedUrl, setReceiptSignedUrl] = useState<string>("");
   const [isVerifying, setIsVerifying] = useState(false);
+  const [openMenuBillId, setOpenMenuBillId] = useState<string | null>(null);
+  const [requestingBill, setRequestingBill] = useState<Bill | null>(null);
+  const [requestAmount, setRequestAmount] = useState("");
+  const [requestDue, setRequestDue] = useState("");
+  const [requestReason, setRequestReason] = useState("");
+  const [requestBusy, setRequestBusy] = useState(false);
+
+  useEffect(() => {
+    if (!openMenuBillId) return;
+    const handleOutsideClick = () => setOpenMenuBillId(null);
+    window.addEventListener("click", handleOutsideClick);
+    return () => window.removeEventListener("click", handleOutsideClick);
+  }, [openMenuBillId]);
+
+  function openRequestModal(bill: Bill) {
+    setRequestingBill(bill);
+    setRequestAmount(String(bill.balance_amount || bill.total_amount));
+    setRequestDue("");
+    setRequestReason("");
+  }
+
+  async function handleSendPaymentRequest(e: FormEvent) {
+    e.preventDefault();
+    if (!requestingBill) return;
+    if (!window.confirm(`Request Rs ${requestAmount} for ${monthLabel(requestingBill.billing_month)}?`)) return;
+
+    setRequestBusy(true);
+    setMessage("");
+    setError("");
+
+    try {
+      const result = await supabase.rpc("request_obligation_payment", {
+        p_bill: requestingBill.id,
+        p_amount: Number(requestAmount),
+        p_due: requestDue,
+        p_note: requestReason.trim(),
+        p_replace_receipt: null,
+      });
+
+      if (result.error) {
+        setError(result.error.message);
+      } else {
+        setMessage("Payment request recorded successfully.");
+        setRequestingBill(null);
+        await refresh();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send payment request.");
+    } finally {
+      setRequestBusy(false);
+    }
+  }
 
   async function openVerifyReceiptModal(receipt: GenericRow) {
     setVerifyingReceipt(receipt);
@@ -1933,6 +2092,82 @@ function BillingContent() {
           </section>
         )}
 
+        {requestingBill && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
+            <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl space-y-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Request Payment</h3>
+                  <p className="text-xs text-slate-500">
+                    Bill {requestingBill.bill_number} · {monthLabel(requestingBill.billing_month)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRequestingBill(null)}
+                  className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleSendPaymentRequest} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Amount to Request (PKR)</label>
+                  <input
+                    required
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={requestAmount}
+                    onChange={(e) => setRequestAmount(e.target.value)}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Payment Due By</label>
+                  <input
+                    required
+                    type="date"
+                    value={requestDue}
+                    onChange={(e) => setRequestDue(e.target.value)}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Reason / Note to Resident</label>
+                  <input
+                    required
+                    placeholder="e.g. Please clear the remaining balance"
+                    value={requestReason}
+                    onChange={(e) => setRequestReason(e.target.value)}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setRequestingBill(null)}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={requestBusy}
+                    className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {requestBusy ? "Sending..." : "Send Request"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {showForm && (
           <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="mb-6 flex items-center justify-between gap-4">
@@ -2493,7 +2728,7 @@ function BillingContent() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-violet-100">
+              <table className="w-full divide-y divide-violet-100">
                 <thead className="bg-white">
                   <tr>
                     <th className="px-5 py-3 text-left">
@@ -2659,35 +2894,34 @@ function BillingContent() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200">
+            <table className="w-full divide-y divide-slate-200">
               <thead className="bg-slate-50">
                 <tr>
-                  {[
-                    "Bill",
-                    "Resident",
-                    "Month",
-                    "Charges",
-                    "Total",
-                    "Balance",
-                    "Due Date",
-                    "Status",
-                    "Email",
-                    "Actions",
-                  ].map((heading) => (
-                    <th
-                      key={heading}
-                      className="px-5 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500"
-                    >
-                      {heading}
-                    </th>
-                  ))}
+                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Resident / Bill
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Amount
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Balance
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Due Date
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Status
+                  </th>
+                  <th className="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Actions
+                  </th>
                 </tr>
               </thead>
 
               <tbody className="divide-y divide-slate-100 bg-white">
                 {loading ? (
                   <tr>
-                    <td colSpan={10} className="px-5 py-12">
+                    <td colSpan={6} className="px-5 py-12">
                       <div className="flex items-center justify-center gap-3 text-sm text-slate-500">
                         <Spinner />
                         Loading bills...
@@ -2696,7 +2930,7 @@ function BillingContent() {
                   </tr>
                 ) : filteredBills.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-5 py-16">
+                    <td colSpan={6} className="px-5 py-16">
                       <div className="flex flex-col items-center gap-2 text-center">
                         <span
                           aria-hidden
@@ -2752,124 +2986,195 @@ function BillingContent() {
                     return (
                       <tr
                         key={bill.id}
-                        className="hover:bg-slate-50/70"
+                        className="hover:bg-slate-50/70 transition-colors"
                       >
-                        <td className="px-5 py-4">
-                          <p className="font-semibold text-slate-900">
-                            {bill.bill_number}
-                          </p>
-                        </td>
-
-                        <td className="px-5 py-4 text-sm text-slate-700">
-                          {residentName(resident)}
-                        </td>
-
-                        <td className="px-5 py-4 text-sm text-slate-700">
-                          {bill.bill_type === "Security Deposit" ? "N/A" : monthLabel(bill.billing_month)}
-                        </td>
-
-                        <td className="px-5 py-4 text-xs text-slate-600">
-                          {bill.bill_type === "Security Deposit" ? (
-                            <p>Deposit: {money(bill.other_amount)}</p>
-                          ) : (
-                            <>
-                              <p>Rent: {money(bill.rent_amount)}</p>
-                              <p>
-                                Electricity:{" "}
-                                {money(bill.electricity_amount)}
-                              </p>
-                              <p>AC: {money(bill.ac_amount)}</p>
-                              <p>Other: {money(bill.other_amount)}</p>
-                            </>
-                          )}
-                        </td>
-
-                        <td className="px-5 py-4 text-sm font-semibold text-slate-900">
-                          {money(bill.total_amount)}
-                        </td>
-
-                        <td className="px-5 py-4 text-sm font-semibold text-red-700">
-                          <p>{money(bill.balance_amount)}</p>
-                          {Number(bill.paid_amount) > 0 && (
-                            <p className="text-xs font-semibold text-emerald-700">Paid: {money(bill.paid_amount)}</p>
-                          )}
-                          {Number(bill.pending_amount) > 0 && (
-                            <p className="text-xs font-semibold text-amber-700">
-                              {money(bill.pending_amount)} pending review
+                        {/* 1. Resident & Bill Information */}
+                        <td className="px-4 py-3 align-middle">
+                          <div className="min-w-0 max-w-[220px]">
+                            <p className="font-semibold text-slate-900 text-sm truncate" title={residentName(resident)}>
+                              {residentName(resident)}
                             </p>
-                          )}
-                        </td>
-
-                        <td className="px-5 py-4 text-sm text-slate-700">
-                          {bill.due_date}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <span
-                            className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${statusClass(
-                              bill.bill_status
-                            )}`}
-                          >
-                            {bill.bill_status}
-                          </span>
-                          {Number(bill.pending_amount) > 0 && (
-                            <span className="mt-1 block whitespace-nowrap rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-bold text-amber-800">
-                              Pending Review ({money(bill.pending_amount)})
-                            </span>
-                          )}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <span
-                            className={`inline-flex whitespace-nowrap rounded-full px-3 py-1 text-xs font-bold ${
-                              isEmailSent
-                                ? "bg-emerald-100 text-emerald-700"
-                                : "bg-amber-100 text-amber-800"
-                            }`}
-                          >
-                            {isEmailSent ? "Email Sent" : "Not Sent"}
-                          </span>
-                        </td>
-
-                        <td className="px-5 py-4">
-                          <div className="flex flex-wrap gap-2">
-                            {bill.bill_type === "Rent" && Number(bill.balance_amount) > 0 && bill.bill_status !== "Cancelled" && <BillPaymentActions billId={bill.id} month={bill.billing_month} />}
-                            {!isEmailSent && bill.bill_status !== "Cancelled" && (
-                              <button
-                                type="button"
-                                onClick={() => void sendBillEmail(bill)}
-                                disabled={sendingEmailBillId === bill.id}
-                                className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:opacity-50"
+                            <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-0.5">
+                              <span
+                                className="font-mono text-[11px] text-slate-500 truncate max-w-[130px] inline-block"
+                                title={bill.bill_number}
                               >
-                                {sendingEmailBillId === bill.id ? "Sending..." : "Send Email"}
-                              </button>
+                                {bill.bill_number}
+                              </span>
+                              <span className="text-slate-300">•</span>
+                              <span className="font-medium text-slate-600 whitespace-nowrap text-[11px]">
+                                {bill.bill_type === "Security Deposit" ? "Deposit" : monthLabel(bill.billing_month)}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* 2. Amount & Breakdown */}
+                        <td className="px-4 py-3 align-middle">
+                          <p className="text-sm font-bold text-slate-900 whitespace-nowrap">
+                            {money(bill.total_amount)}
+                          </p>
+                          {bill.bill_type === "Security Deposit" ? (
+                            <p className="text-[11px] text-slate-400">Security Deposit</p>
+                          ) : (Number(bill.electricity_amount) > 0 || Number(bill.ac_amount) > 0 || Number(bill.other_amount) > 0) ? (
+                            <p
+                              className="text-[11px] text-slate-500 truncate max-w-[170px]"
+                              title={`Rent ${money(bill.rent_amount)}${Number(bill.electricity_amount) > 0 ? ` + Elec ${money(bill.electricity_amount)}` : ""}${Number(bill.ac_amount) > 0 ? ` + AC ${money(bill.ac_amount)}` : ""}${Number(bill.other_amount) > 0 ? ` + Other ${money(bill.other_amount)}` : ""}`}
+                            >
+                              Rent {money(bill.rent_amount)}
+                              {Number(bill.electricity_amount) > 0 && ` + Elec ${money(bill.electricity_amount)}`}
+                              {Number(bill.ac_amount) > 0 && ` + AC ${money(bill.ac_amount)}`}
+                              {Number(bill.other_amount) > 0 && ` + Other ${money(bill.other_amount)}`}
+                            </p>
+                          ) : (
+                            <p className="text-[11px] text-slate-400">Rent: {money(bill.rent_amount)}</p>
+                          )}
+                        </td>
+
+                        {/* 3. Balance */}
+                        <td className="px-4 py-3 align-middle whitespace-nowrap">
+                          {Number(bill.balance_amount) <= 0 && Number(bill.total_amount) > 0 ? (
+                            <div>
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-800">
+                                ✓ Settled
+                              </span>
+                              {Number(bill.paid_amount) > 0 && (
+                                <p className="text-[11px] text-slate-500 mt-0.5">Paid {money(bill.paid_amount)}</p>
+                              )}
+                            </div>
+                          ) : (
+                            <div>
+                              <p className="text-sm font-bold text-rose-600">
+                                {money(bill.balance_amount)}
+                              </p>
+                              {Number(bill.paid_amount) > 0 && (
+                                <p className="text-[11px] font-semibold text-emerald-700">Paid {money(bill.paid_amount)}</p>
+                              )}
+                              {Number(bill.pending_amount) > 0 && (
+                                <p className="text-[11px] font-semibold text-amber-700">
+                                  {money(bill.pending_amount)} pending review
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </td>
+
+                        {/* 4. Due Date & Commitment */}
+                        <td className="px-4 py-3 align-middle whitespace-nowrap">
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-1.5 whitespace-nowrap">
+                              <span className="text-xs font-semibold text-slate-900">{bill.due_date}</span>
+                              <span className="rounded bg-slate-100 px-1 py-0.2 text-[9px] font-bold text-slate-500 uppercase tracking-wider">Due</span>
+                            </div>
+
+                            {bill.remaining_payment_date && (
+                              Number(bill.balance_amount) <= 0 ? (
+                                <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 border border-emerald-200">
+                                  <span>✓</span> Paid ({bill.remaining_payment_date})
+                                </span>
+                              ) : (
+                                <div className="flex flex-col gap-0.5">
+                                  <span
+                                    className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                                      bill.remaining_payment_status === "Overdue"
+                                        ? "bg-rose-50 text-rose-700 border border-rose-200"
+                                        : bill.remaining_payment_status === "Due Today"
+                                        ? "bg-amber-50 text-amber-800 border border-amber-200"
+                                        : "bg-indigo-50 text-indigo-700 border border-indigo-200"
+                                    }`}
+                                  >
+                                    <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                    </svg>
+                                    <span>Rem: {bill.remaining_payment_date}</span>
+                                  </span>
+                                  {bill.remaining_payment_note && (
+                                    <span
+                                      className="text-[10px] text-slate-400 italic truncate max-w-[130px]"
+                                      title={`Commitment Reason: ${bill.remaining_payment_note}`}
+                                    >
+                                      &ldquo;{bill.remaining_payment_note}&rdquo;
+                                    </span>
+                                  )}
+                                </div>
+                              )
                             )}
+                          </div>
+                        </td>
+
+                        {/* 5. Status & Email */}
+                        <td className="px-4 py-3 align-middle whitespace-nowrap">
+                          <div className="flex flex-col items-start gap-1">
+                            {Number(bill.balance_amount) <= 0 && Number(bill.total_amount) > 0 ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-800">
+                                <span className="text-emerald-600 font-extrabold">✓</span> Paid
+                              </span>
+                            ) : bill.bill_status === "Partially Paid" || (Number(bill.paid_amount) > 0 && Number(bill.balance_amount) > 0) || (Number(bill.pending_amount) > 0 && Number(bill.pending_amount) < Number(bill.total_amount)) ? (
+                              <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-bold text-blue-800">
+                                Partially Paid
+                              </span>
+                            ) : (
+                              <span
+                                className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold ${statusClass(
+                                  bill.bill_status
+                                )}`}
+                              >
+                                {bill.bill_status}
+                              </span>
+                            )}
+
+                            <span
+                              className={`inline-flex items-center gap-1 text-[11px] font-medium ${
+                                isEmailSent ? "text-emerald-700" : "text-slate-400"
+                              }`}
+                              title={isEmailSent ? "Bill email sent to resident" : "Bill email not yet sent"}
+                            >
+                              <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                              </svg>
+                              {isEmailSent ? "Emailed" : "Not sent"}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* 6. Actions */}
+                        <td className="px-4 py-3 align-middle text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {/* Verify Receipt button (prominent when pending) */}
                             {receipt && receipt.status === "Pending Verification" && (
                               <button
                                 type="button"
                                 onClick={() => void openVerifyReceiptModal(receipt)}
-                                className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 shadow-sm"
+                                className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white shadow-2xs hover:bg-emerald-700 transition"
+                                title="Verify receipt uploaded by resident"
                               >
-                                Verify Receipt
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                Verify
                               </button>
                             )}
 
-                            {receipt && receipt.status === "Verified" && (
+                            {/* Quick Record Payment */}
+                            {Number(bill.balance_amount) > 0 && bill.bill_status !== "Cancelled" && (
                               <button
                                 type="button"
-                                onClick={() => void openVerifyReceiptModal(receipt)}
-                                className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+                                onClick={() => openPaymentForm(bill)}
+                                className="inline-flex items-center gap-1 rounded-lg bg-indigo-50 border border-indigo-200 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition"
+                                title="Record payment for this bill"
                               >
-                                View Receipt
+                                + Pay
                               </button>
                             )}
 
+                            {/* Approve (for unapproved bills) */}
                             {isUnapprovedBill(bill.bill_status) && (
                               <button
                                 type="button"
                                 onClick={() => void handleApprove([bill.id])}
                                 disabled={approvingIds.length > 0}
-                                className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                className="inline-flex items-center gap-1 rounded-lg bg-violet-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50 transition"
+                                title="Approve this bill"
                               >
                                 {approvingIds.includes(bill.id) ? (
                                   <>
@@ -2882,56 +3187,148 @@ function BillingContent() {
                               </button>
                             )}
 
+                            {/* Print */}
                             <button
                               type="button"
                               onClick={() => printBill(bill)}
-                              className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+                              className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white p-1.5 text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition shadow-2xs"
+                              title="Print Bill / Voucher"
                             >
-                              Print
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4H7v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                              </svg>
                             </button>
 
-                            <button
-                              type="button"
-                              onClick={() => printBill(bill)}
-                              className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                            >
-                              Download Voucher
-                            </button>
-
-                            {Number(bill.balance_amount) > 0 && bill.bill_status !== "Cancelled" && (
-                              <button
-                                type="button"
-                                onClick={() => openPaymentForm(bill)}
-                                className="rounded-lg bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100"
-                              >
-                                + Payment
-                              </button>
-                            )}
-
+                            {/* Edit */}
                             <button
                               type="button"
                               onClick={() => void openEditForm(bill)}
-                              className="rounded-lg border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-700"
+                              className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white p-1.5 text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition shadow-2xs"
+                              title="Edit Bill"
                             >
-                              Edit
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
                             </button>
 
-                            <button
-                              type="button"
-                              onClick={() => void cancelBill(bill)}
-                              disabled={bill.bill_status === "Cancelled"}
-                              className="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-700"
-                            >
-                              {bill.bill_status === "Cancelled" ? "Cancelled" : "Cancel"}
-                            </button>
+                            {/* More Actions Dropdown ••• */}
+                            <div className="relative inline-block text-left">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenMenuBillId(openMenuBillId === bill.id ? null : bill.id);
+                                }}
+                                className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white p-1.5 text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition shadow-2xs"
+                                title="More actions"
+                                aria-label="More actions"
+                              >
+                                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                  <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                                </svg>
+                              </button>
 
-                            <button
-                              type="button"
-                              onClick={() => void deleteBill(bill)}
-                              className="rounded-lg border border-red-600 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-100"
-                            >
-                              Delete
-                            </button>
+                              {openMenuBillId === bill.id && (
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="absolute right-0 z-40 mt-1 w-44 rounded-xl border border-slate-200 bg-white py-1 shadow-lg ring-1 ring-black/5 animate-in fade-in text-left"
+                                >
+                                  {receipt && receipt.status === "Verified" && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenMenuBillId(null);
+                                        void openVerifyReceiptModal(receipt);
+                                      }}
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+                                    >
+                                      <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                      </svg>
+                                      View Receipt
+                                    </button>
+                                  )}
+
+                                  {!isEmailSent && bill.bill_status !== "Cancelled" && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenMenuBillId(null);
+                                        void sendBillEmail(bill);
+                                      }}
+                                      disabled={sendingEmailBillId === bill.id}
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                                    >
+                                      <svg className="w-3.5 h-3.5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                                      </svg>
+                                      {sendingEmailBillId === bill.id ? "Sending..." : "Send Email"}
+                                    </button>
+                                  )}
+
+                                  {bill.bill_type === "Rent" && Number(bill.balance_amount) > 0 && bill.bill_status !== "Cancelled" && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenMenuBillId(null);
+                                        openRequestModal(bill);
+                                      }}
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-indigo-700 hover:bg-indigo-50"
+                                    >
+                                      <svg className="w-3.5 h-3.5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                      </svg>
+                                      Request Payment
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setOpenMenuBillId(null);
+                                      printBill(bill);
+                                    }}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                  >
+                                    <svg className="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                    </svg>
+                                    Download Voucher
+                                  </button>
+
+                                  <div className="my-1 border-t border-slate-100" />
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setOpenMenuBillId(null);
+                                      void cancelBill(bill);
+                                    }}
+                                    disabled={bill.bill_status === "Cancelled"}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                                  >
+                                    <svg className="w-3.5 h-3.5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                                    </svg>
+                                    {bill.bill_status === "Cancelled" ? "Cancelled" : "Cancel Bill"}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setOpenMenuBillId(null);
+                                      void deleteBill(bill);
+                                    }}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-rose-600 hover:bg-rose-50"
+                                  >
+                                    <svg className="w-3.5 h-3.5 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                    Delete Bill
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </td>
                       </tr>
@@ -2965,7 +3362,7 @@ function BillingContent() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200">
+            <table className="w-full divide-y divide-slate-200">
               <thead className="bg-slate-50">
                 <tr>
                   {["Month / Due", "Rent", "AC", "Total", "Verified", "Outstanding", "Status", "Payment History"].map((heading) => (

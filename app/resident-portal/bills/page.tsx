@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { supabase } from "@/lib/supabase";
 import {
   resolveAuthenticatedResident,
   type AuthenticatedResident,
 } from "@/lib/residentPortalAuth";
 import { loadResidentPortalData } from "@/lib/residentPortalData";
-import { paymentBillAmounts } from "@/lib/paymentAllocations";
 import {
   deriveBillStatus,
   roundMoney,
@@ -31,9 +31,14 @@ type Bill = {
   discount_amount: number;
   total_amount: number;
   paid_amount: number;
+  pending_amount?: number;
   balance_amount: number;
   bill_status: BillStatus;
   notes: string | null;
+  remaining_payment_date?: string | null;
+  remaining_payment_amount?: number | null;
+  remaining_payment_note?: string | null;
+  remaining_payment_status?: string | null;
 };
 
 type Payment = {
@@ -105,26 +110,101 @@ export default function ResidentBillsPage() {
       return;
     }
 
-    const payments = portalResult.data.payments as Payment[];
+    const payments = (portalResult.data.payments ?? []) as Payment[];
     const verifiedByBill = new Map<string, number>();
+    const pendingByBill = new Map<string, number>();
+
     for (const payment of payments) {
-      if (normalized(payment.payment_status) !== "verified") continue;
-      for (const allocation of paymentBillAmounts(payment, payment.allocations ?? [])) {
-        verifiedByBill.set(allocation.bill_id, roundMoney((verifiedByBill.get(allocation.bill_id) ?? 0) + Number(allocation.amount || 0)));
+      const isVerified = normalized(payment.payment_status) === "verified";
+      const isPending = normalized(payment.payment_status) === "pending";
+      if (!isVerified && !isPending) continue;
+
+      const targetMap = isVerified ? verifiedByBill : pendingByBill;
+      const allocs = (Array.isArray(payment.allocations) && payment.allocations.length > 0)
+        ? payment.allocations
+        : payment.bill_id
+        ? [{ bill_id: payment.bill_id, amount: Number(payment.amount || 0) }]
+        : [];
+
+      for (const allocation of allocs) {
+        if (!allocation.bill_id) continue;
+        targetMap.set(allocation.bill_id, roundMoney((targetMap.get(allocation.bill_id) ?? 0) + Number(allocation.amount || 0)));
+      }
+    }
+
+    let followupsData: Array<Record<string, unknown>> = [];
+    try {
+      const followupsResult = await supabase.rpc("payment_followup_data");
+      if (Array.isArray(followupsResult.data)) {
+        followupsData = followupsResult.data;
+      }
+    } catch {
+      // non-blocking
+    }
+
+    const followupsByBill = new Map<string, {
+      remaining_payment_date: string | null;
+      remaining_payment_amount: number | null;
+      remaining_payment_note: string | null;
+      remaining_payment_status: string | null;
+    }>();
+
+    for (const item of followupsData) {
+      const billId = String(item.bill_id || "");
+      if (!billId) continue;
+      if (Number(item.pending || 0) > 0 && !(pendingByBill.get(billId) ?? 0)) {
+        pendingByBill.set(billId, Number(item.pending));
+      }
+      if (Number(item.verified || 0) > 0 && !(verifiedByBill.get(billId) ?? 0)) {
+        verifiedByBill.set(billId, Number(item.verified));
+      }
+      const followupsList = Array.isArray(item.followups) ? item.followups : [];
+      const commitment =
+        followupsList.find((f: Record<string, unknown>) => f.kind === "commitment" && f.status !== "Resolved") ||
+        followupsList.find((f: Record<string, unknown>) => f.kind === "commitment") ||
+        followupsList[0];
+
+      if (commitment) {
+        followupsByBill.set(billId, {
+          remaining_payment_date: commitment.due_date ? String(commitment.due_date) : null,
+          remaining_payment_amount: commitment.amount ? Number(commitment.amount) : null,
+          remaining_payment_note: commitment.note ? String(commitment.note) : null,
+          remaining_payment_status: commitment.status ? String(commitment.status) : null,
+        });
       }
     }
 
     const calculatedBills = (portalResult.data.bills as Bill[]).map((bill) => {
       const paid = verifiedByBill.get(bill.id) ?? 0;
+      const pending = pendingByBill.get(bill.id) ?? 0;
       const total = Number(bill.total_amount || 0);
+      const balance = Math.max(roundMoney(total - paid), 0);
       const cancelled = normalized(bill.bill_status) === "cancelled";
+      const followup = followupsByBill.get(bill.id);
+
+      let computedStatus: BillStatus;
+      if (cancelled) {
+        computedStatus = "Cancelled";
+      } else if (total > 0 && balance === 0) {
+        computedStatus = "Paid";
+      } else if (paid > 0 && balance > 0) {
+        computedStatus = "Partially Paid";
+      } else if (pending > 0 && pending < total) {
+        computedStatus = "Partially Paid";
+      } else {
+        computedStatus = deriveBillStatus(total, paid, bill.due_date, bill.bill_status);
+      }
+
       return {
         ...bill,
         paid_amount: paid,
-        balance_amount: Math.max(roundMoney(total - paid), 0),
-        bill_status: cancelled
-          ? "Cancelled"
-          : deriveBillStatus(total, paid, bill.due_date, bill.bill_status),
+        pending_amount: pending,
+        balance_amount: balance,
+        bill_status: computedStatus,
+        remaining_payment_date: followup?.remaining_payment_date ?? null,
+        remaining_payment_amount: followup?.remaining_payment_amount ?? null,
+        remaining_payment_note: followup?.remaining_payment_note ?? null,
+        remaining_payment_status: followup?.remaining_payment_status ?? null,
       } as Bill;
     });
 
@@ -141,16 +221,43 @@ export default function ResidentBillsPage() {
   const filteredBills = useMemo(() => {
     const query = search.trim().toLowerCase();
     return bills.filter((bill) => {
-      const matchesStatus = statusFilter === "All" || bill.bill_status === statusFilter;
+      const isPartiallyPaid =
+        bill.bill_status === "Partially Paid" ||
+        (Number(bill.paid_amount) > 0 && Number(bill.balance_amount) > 0) ||
+        (Number(bill.pending_amount) > 0 && Number(bill.pending_amount) < Number(bill.total_amount)) ||
+        (Boolean(bill.remaining_payment_date) && Number(bill.balance_amount) > 0);
+
+      const isCompletelyPaid =
+        bill.bill_status === "Paid" ||
+        (Number(bill.balance_amount) <= 0 && Number(bill.total_amount) > 0) ||
+        (Number(bill.paid_amount) >= Number(bill.total_amount) && Number(bill.total_amount) > 0);
+
+      const matchesStatus =
+        statusFilter === "All" ||
+        (statusFilter === "Partially Paid"
+          ? isPartiallyPaid
+          : statusFilter === "Paid"
+          ? isCompletelyPaid
+          : bill.bill_status === statusFilter);
+
       const matchesSearch =
         !query ||
         bill.bill_number.toLowerCase().includes(query) ||
-        monthLabel(bill.billing_month).toLowerCase().includes(query);
+        monthLabel(bill.billing_month).toLowerCase().includes(query) ||
+        (bill.remaining_payment_date ?? "").toLowerCase().includes(query) ||
+        (bill.remaining_payment_note ?? "").toLowerCase().includes(query);
       return matchesStatus && matchesSearch;
     });
   }, [bills, search, statusFilter]);
 
   async function openBill(billId: string, print = false) {
+    const found = bills.find((b) => b.id === billId);
+    if (found) {
+      setSelectedBill(found);
+      if (print) window.setTimeout(() => window.print(), 0);
+      return;
+    }
+
     const portalResult = await loadResidentPortalData();
     if (!portalResult.data) {
       setError(portalResult.error);
@@ -230,10 +337,23 @@ export default function ResidentBillsPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="font-bold text-slate-900">{bill.bill_number}</p>
-                      <p className="mt-0.5 text-xs text-slate-500">{monthLabel(bill.billing_month)} · Due {bill.due_date}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {monthLabel(bill.billing_month)} · Due {bill.due_date}
+                        {bill.remaining_payment_date && (
+                          Number(bill.balance_amount) <= 0 ? (
+                            <span className="ml-1 text-emerald-700 font-semibold">· Settled ({bill.remaining_payment_date})</span>
+                          ) : (
+                            <span className="ml-1 text-indigo-700 font-semibold">· Remaining Due: {bill.remaining_payment_date}</span>
+                          )
+                        )}
+                      </p>
                     </div>
-                    <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${statusClass(bill.bill_status)}`}>
-                      {bill.bill_status}
+                    <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${
+                      Number(bill.balance_amount) <= 0 && Number(bill.total_amount) > 0
+                        ? "bg-emerald-100 text-emerald-800"
+                        : statusClass(bill.bill_status)
+                    }`}>
+                      {Number(bill.balance_amount) <= 0 && Number(bill.total_amount) > 0 ? "✓ Completely Paid" : bill.bill_status}
                     </span>
                   </div>
                   <div className="grid grid-cols-3 gap-2 rounded-2xl bg-slate-50 p-3 text-xs">
@@ -247,7 +367,14 @@ export default function ResidentBillsPage() {
                     </div>
                     <div>
                       <p className="text-slate-500">Balance</p>
-                      <p className="mt-1 font-bold text-red-700">{money(bill.balance_amount)}</p>
+                      <p className={`mt-1 font-bold ${Number(bill.balance_amount) <= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                        {money(bill.balance_amount)}
+                      </p>
+                      {Number(bill.pending_amount) > 0 && (
+                        <p className="text-[10px] text-amber-700 font-medium">
+                          {money(bill.pending_amount)} in review
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -269,7 +396,24 @@ export default function ResidentBillsPage() {
                   <tr key={bill.id}>
                     <td className="px-4 py-4 text-sm font-semibold">{bill.bill_number}</td>
                     <td className="px-4 py-4 text-sm">{monthLabel(bill.billing_month)}</td>
-                    <td className="px-4 py-4 text-sm">{bill.due_date}</td>
+                    <td className="px-4 py-4 text-sm">
+                      <div>
+                        <span>{bill.due_date}</span>
+                        {bill.remaining_payment_date && (
+                          <div className="mt-1">
+                            {Number(bill.balance_amount) <= 0 ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-semibold text-emerald-700">
+                                ✓ Settled ({bill.remaining_payment_date})
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded bg-indigo-50 px-1.5 py-0.5 text-xs font-semibold text-indigo-700">
+                                Remaining Due: {bill.remaining_payment_date}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-4 text-sm">{money(bill.rent_amount)}</td>
                     <td className="px-4 py-4 text-sm">{money(bill.electricity_amount)}</td>
                     <td className="px-4 py-4 text-sm">{money(bill.ac_amount)}</td>
@@ -277,8 +421,34 @@ export default function ResidentBillsPage() {
                     <td className="px-4 py-4 text-sm">{money(bill.discount_amount)}</td>
                     <td className="px-4 py-4 text-sm font-semibold">{money(bill.total_amount)}</td>
                     <td className="px-4 py-4 text-sm text-emerald-700">{money(bill.paid_amount)}</td>
-                    <td className="px-4 py-4 text-sm font-semibold text-red-700">{money(bill.balance_amount)}</td>
-                    <td className="px-4 py-4"><span className={`rounded-full px-3 py-1 text-xs font-bold ${statusClass(bill.bill_status)}`}>{bill.bill_status}</span></td>
+                    <td className="px-4 py-4 text-sm font-semibold">
+                      {Number(bill.balance_amount) <= 0 && Number(bill.total_amount) > 0 ? (
+                        <span className="text-emerald-700">✓ Settled</span>
+                      ) : (
+                        <span className="text-red-700">{money(bill.balance_amount)}</span>
+                      )}
+                      {Number(bill.pending_amount) > 0 && (
+                        <span className="block text-[11px] font-normal text-amber-700">
+                          {money(bill.pending_amount)} pending review
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-4">
+                      {Number(bill.balance_amount) <= 0 && Number(bill.total_amount) > 0 ? (
+                        <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800">
+                          ✓ Completely Paid
+                        </span>
+                      ) : (
+                        <span className={`rounded-full px-3 py-1 text-xs font-bold ${statusClass(bill.bill_status)}`}>
+                          {bill.bill_status}
+                        </span>
+                      )}
+                      {Number(bill.pending_amount) > 0 && (
+                        <span className="mt-1 block rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                          Pending Review ({money(bill.pending_amount)})
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-4">
                       <div className="flex flex-wrap gap-2">
                         <button type="button" onClick={() => void openBill(bill.id)} className="rounded-lg border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50">View</button>
