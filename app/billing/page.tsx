@@ -43,6 +43,7 @@ import {
   type MeterReadingConfig,
   DEFAULT_UNIT_RATE,
 } from "@/lib/meterReading";
+import FineWaiverManagement from "@/components/billing/FineWaiverManagement";
 
 type GenericRow = Record<string, unknown>;
 
@@ -279,6 +280,9 @@ function BillingContent() {
   const [statusFilter, setStatusFilter] = useState("All");
   const [monthFilter, setMonthFilter] = useState("All");
   const searchParams = useSearchParams();
+  const [billingTab, setBillingTab] = useState<"bills" | "waivers">(
+    searchParams.get("tab") === "waivers" ? "waivers" : "bills"
+  );
   const [typeFilter, setTypeFilter] = useState(searchParams.get("type") || "Rent");
   const [ledgerResidentId, setLedgerResidentId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1799,44 +1803,78 @@ function BillingContent() {
             </p>
 
             <h1 className="mt-2 text-3xl font-bold text-slate-900">
-              {typeFilter === "Security Deposit" ? "Security Deposits" : "Rent Bills"}
+              {billingTab === "waivers"
+                ? "Fine Waiver Requests"
+                : typeFilter === "Security Deposit"
+                ? "Security Deposits"
+                : "Rent Bills"}
             </h1>
 
             <p className="mt-1 text-sm text-slate-500">
-              {typeFilter === "Security Deposit"
+              {billingTab === "waivers"
+                ? "Review and decide on resident requests for late fine waivers (Rs. 300/day overdue)."
+                : typeFilter === "Security Deposit"
                 ? "Manage resident security deposits and record payments."
                 : "Generate monthly bills and manage outstanding balances."}
             </p>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            {typeFilter !== "Security Deposit" && (
+          {billingTab === "bills" && (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              {typeFilter !== "Security Deposit" && (
+                <button
+                  type="button"
+                  onClick={() => void handleGenerateAll()}
+                  disabled={generating}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-5 py-3 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {generating ? (
+                    <>
+                      <Spinner />
+                      Generating bills...
+                    </>
+                  ) : (
+                    <>Generate All Bills</>
+                  )}
+                </button>
+              )}
+
               <button
                 type="button"
-                onClick={() => void handleGenerateAll()}
-                disabled={generating}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-5 py-3 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={openAddForm}
+                className="rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700"
               >
-                {generating ? (
-                  <>
-                    <Spinner />
-                    Generating bills...
-                  </>
-                ) : (
-                  <>Generate All Bills</>
-                )}
+                + {typeFilter === "Security Deposit" ? "Add Deposit" : "Add Bill"}
               </button>
-            )}
-
-            <button
-              type="button"
-              onClick={openAddForm}
-              className="rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700"
-            >
-              + {typeFilter === "Security Deposit" ? "Add Deposit" : "Add Bill"}
-            </button>
-          </div>
+            </div>
+          )}
         </section>
+
+        {/* Navigation Tabs */}
+        <div className="flex border-b border-slate-200 gap-2">
+          <button
+            type="button"
+            onClick={() => setBillingTab("bills")}
+            className={`pb-3 px-5 text-sm font-bold border-b-2 transition ${
+              billingTab === "bills"
+                ? "border-indigo-600 text-indigo-600"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            Bills & Invoices
+          </button>
+          <button
+            type="button"
+            onClick={() => setBillingTab("waivers")}
+            className={`pb-3 px-5 text-sm font-bold border-b-2 transition flex items-center gap-2 ${
+              billingTab === "waivers"
+                ? "border-indigo-600 text-indigo-600"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            Fine Waiver Requests
+          </button>
+        </div>
 
         {toasts.length > 0 && (
           <div
@@ -1897,7 +1935,11 @@ function BillingContent() {
           </section>
         )}
 
-        {verifyingReceipt && (
+        {billingTab === "waivers" ? (
+          <FineWaiverManagement onWaiverUpdated={refresh} />
+        ) : (
+          <>
+            {verifyingReceipt && (
           <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="mb-6 flex items-center justify-between gap-4">
               <div>
@@ -3413,6 +3455,8 @@ function BillingContent() {
             </table>
           </div>
         </section>
+          </>
+        )}
       </div>
     </main>
   );

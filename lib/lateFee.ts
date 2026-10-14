@@ -1,4 +1,4 @@
-﻿export const LATE_FEE_DAILY_RATE = 300;
+export const LATE_FEE_DAILY_RATE = 300;
 export const LATE_FEE_GRACE_LAST_DAY = 5;
 
 function dateOnly(value: string | Date) {
@@ -25,9 +25,8 @@ function utcDayNumber(year: number, month: number, day: number) {
 
 /**
  * Hostel late-fee rule:
- * Preview only; the database validates eligibility, payments and waivers.
- * Calendar days 1-5 defer the current month's charge; day six includes them.
- * Only a next actual rent bill establishes an exclusive cycle boundary.
+ * When a bill due date is passed, fine is imposed for every overdue day at Rs. 300/day.
+ * If nextDueDate is present, caps at the next bill cycle boundary.
  */
 export function calculateLateFee(
   dueDate: string | Date,
@@ -37,16 +36,15 @@ export function calculateLateFee(
   const bill = parseDateOnly(dateOnly(dueDate));
   const current = parseDateOnly(dateOnly(asOf));
   const dueNo = utcDayNumber(bill.year, bill.month, bill.day);
-  const startNo = Math.max(dueNo + 1, utcDayNumber(current.year, current.month, 1));
   const currentNo = utcDayNumber(current.year, current.month, current.day);
-  let endNo = currentNo + 1;
+  let endNo = currentNo;
   if (nextDueDate) {
     const next = parseDateOnly(dateOnly(nextDueDate));
     const nextNo = utcDayNumber(next.year, next.month, next.day);
-    if (nextNo > dueNo) endNo = Math.min(endNo, nextNo);
+    if (nextNo > dueNo) endNo = Math.min(endNo, nextNo - 1);
   }
-  const days = Math.max(0, Math.min(currentNo, endNo - 1) - startNo + 1);
-  return current.day <= LATE_FEE_GRACE_LAST_DAY ? 0 : days * LATE_FEE_DAILY_RATE;
+  const overdueDays = Math.max(0, endNo - dueNo);
+  return overdueDays * LATE_FEE_DAILY_RATE;
 }
 
 export function lateFeePayable(
