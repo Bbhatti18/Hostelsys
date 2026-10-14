@@ -69,39 +69,75 @@ export default function DashboardCharts({ data }: { data: DashboardData }) {
     }));
   }, [payments, bills, lateFeeAllocations]);
 
-  const COLORS = ["#4f46e5", "#10b981", "#f59e0b", "#94a3b8"];
+  const COLORS = ["#4f46e5", "#10b981", "#f59e0b", "#94a3b8", "#e11d48"];
 
   const formatCurrency = (value: number) => `Rs ${value.toLocaleString()}`;
 
+  const totalBedsCount = beds.length;
+
   return (
-    <div className="mt-10 grid gap-6 lg:grid-cols-2">
-      <section className="rounded-2xl bg-white p-4 text-slate-950 shadow-lg sm:p-6 dark:bg-slate-800 dark:text-slate-100">
-        <h3 className="mb-6 text-xl font-bold">Revenue (Last 6 Months)</h3>
+    <div className="mt-8 grid gap-6 lg:grid-cols-2">
+      {/* Revenue Chart */}
+      <section className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-xs sm:p-6 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-3 mb-6">
+          <div>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+              Financial Trend
+            </span>
+            <h3 className="text-lg font-bold text-slate-900 sm:text-xl dark:text-white">
+              Revenue (Last 6 Months)
+            </h3>
+          </div>
+          <span className="rounded-lg bg-indigo-50 border border-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700 dark:bg-indigo-950/60 dark:border-indigo-900/60 dark:text-indigo-300">
+            Monthly Verified
+          </span>
+        </div>
+
         <div className="h-[300px] w-full">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={revenueData} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" opacity={0.6} />
               <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: "#64748b", fontSize: 12 }} dy={10} />
               <YAxis
                 axisLine={false}
                 tickLine={false}
-                tickFormatter={(val: number) => `Rs ${val >= 1000 ? val / 1000 + 'k' : val}`}
+                tickFormatter={(val: number) => `Rs ${val >= 1000 ? val / 1000 + "k" : val}`}
                 tick={{ fill: "#64748b", fontSize: 12 }}
                 width={70}
               />
               <Tooltip
-                cursor={{ fill: "#f8fafc" }}
-                contentStyle={{ borderRadius: "12px", border: "none", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)" }}
+                cursor={{ fill: "#f1f5f9" }}
+                contentStyle={{
+                  borderRadius: "14px",
+                  border: "1px solid #e2e8f0",
+                  backgroundColor: "#ffffff",
+                  boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1)",
+                  padding: "10px 14px",
+                }}
                 formatter={(value: any) => [formatCurrency(Number(value) || 0), "Revenue"]}
               />
-              <Bar dataKey="amount" fill="#4f46e5" radius={[6, 6, 0, 0]} barSize={40} />
+              <Bar dataKey="amount" fill="#4f46e5" radius={[8, 8, 0, 0]} barSize={36} />
             </BarChart>
           </ResponsiveContainer>
         </div>
       </section>
 
-      <section className="rounded-2xl bg-white p-4 text-slate-950 shadow-lg sm:p-6 dark:bg-slate-800 dark:text-slate-100">
-        <h3 className="mb-6 text-xl font-bold">Bed Occupancy</h3>
+      {/* Bed Occupancy Chart */}
+      <section className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-xs sm:p-6 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center justify-between gap-3 mb-6">
+          <div>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+              Capacity Status
+            </span>
+            <h3 className="text-lg font-bold text-slate-900 sm:text-xl dark:text-white">
+              Bed Occupancy
+            </h3>
+          </div>
+          <span className="rounded-lg bg-emerald-50 border border-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-950/60 dark:border-emerald-900/60 dark:text-emerald-300">
+            {totalBedsCount} Total Beds
+          </span>
+        </div>
+
         <div className="flex h-[300px] w-full items-center justify-center">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
@@ -109,9 +145,9 @@ export default function DashboardCharts({ data }: { data: DashboardData }) {
                 data={occupancyData}
                 cx="50%"
                 cy="50%"
-                innerRadius={70}
-                outerRadius={100}
-                paddingAngle={5}
+                innerRadius={68}
+                outerRadius={96}
+                paddingAngle={4}
                 dataKey="value"
                 stroke="none"
               >
@@ -120,7 +156,13 @@ export default function DashboardCharts({ data }: { data: DashboardData }) {
                 ))}
               </Pie>
               <Tooltip
-                contentStyle={{ borderRadius: "12px", border: "none", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)" }}
+                contentStyle={{
+                  borderRadius: "14px",
+                  border: "1px solid #e2e8f0",
+                  backgroundColor: "#ffffff",
+                  boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1)",
+                  padding: "8px 12px",
+                }}
               />
               <Legend verticalAlign="bottom" height={36} iconType="circle" />
             </PieChart>
@@ -130,4 +172,3 @@ export default function DashboardCharts({ data }: { data: DashboardData }) {
     </div>
   );
 }
-
