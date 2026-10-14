@@ -316,7 +316,7 @@ export default function ResidentPortalPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50">
+    <main className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <ResidentNoticePopup notices={notices} residentId={text(resident.id)} />
       <ResidentDuesPopup
         residentId={text(resident.id)}
@@ -329,54 +329,62 @@ export default function ResidentPortalPage() {
         bills={bills}
         payments={payments}
       />
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-4 sm:gap-4 sm:px-6 sm:py-5 lg:px-8">
-          <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
-            <img src="/logo.jpg" alt="Logo" className="h-11 w-11 shrink-0 rounded-full object-cover shadow-sm sm:h-14 sm:w-14" />
+
+      <div className="mx-auto max-w-7xl space-y-6">
+        {/* Welcome Header */}
+        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <p className="truncate text-xs font-semibold uppercase tracking-[0.14em] text-indigo-600 sm:text-sm sm:tracking-[0.2em]">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-indigo-600 sm:text-sm sm:tracking-[0.2em]">
                 University Girls Hostel
               </p>
-              <h1 className="mt-0.5 truncate text-xl font-bold text-slate-900 sm:mt-1 sm:text-2xl">
-                Resident Portal
+              <h1 className="mt-1 text-2xl font-bold text-slate-900 sm:text-3xl">
+                Welcome back, {residentName(resident)}
               </h1>
-              <p className="mt-0.5 truncate text-xs text-slate-500 sm:mt-1 sm:text-sm">
-                Welcome, {residentName(resident)}
+              <p className="mt-1 text-xs text-slate-500 sm:text-sm">
+                Room: <strong className="text-slate-800">{roomName(room)}</strong> • Bed: <strong className="text-slate-800">{bedName(bed)}</strong> • Status:{" "}
+                <span className="inline-flex items-center gap-1 font-semibold text-emerald-600">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  {hasActiveAdmission ? "Active Resident" : "Pending Admission"}
+                </span>
               </p>
             </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={logout}
-            className="shrink-0 rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 sm:px-4 sm:text-sm"
-          >
-            Logout
-          </button>
-        </div>
-      </header>
-
-      <div className="mx-auto grid max-w-7xl gap-4 px-4 py-4 sm:gap-6 sm:px-6 sm:py-6 lg:grid-cols-[240px_1fr] lg:px-8">
-        <aside className="min-w-0 rounded-2xl border border-slate-200 bg-white p-2.5 shadow-sm sm:rounded-3xl sm:p-4 lg:sticky lg:top-6 lg:self-start">
-          <nav className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:space-y-1.5 lg:overflow-visible lg:pb-0" aria-label="Resident portal navigation">
-            {portalTabs.map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setActiveTab(tab)}
-                className={`shrink-0 whitespace-nowrap rounded-xl px-3.5 py-2.5 text-left text-sm font-semibold transition lg:w-full lg:px-4 lg:py-3 ${
-                  activeTab === tab
-                    ? "bg-indigo-600 text-white shadow-xs"
-                    : "text-slate-700 hover:bg-slate-100"
-                }`}
+            <div className="flex flex-wrap gap-2 sm:shrink-0">
+              <Link
+                href="/resident-portal/bills"
+                className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 transition sm:text-sm"
               >
-                {tab}
-              </button>
-            ))}
-          </nav>
-        </aside>
+                My Bills & Fines
+              </Link>
+              <Link
+                href="/resident-portal/payments"
+                className="rounded-xl border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition sm:text-sm"
+              >
+                Submit Payment
+              </Link>
+            </div>
+          </div>
+        </section>
 
-        <section className="min-w-0 space-y-6">
+        {/* Dashboard View Tabs */}
+        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin" aria-label="Dashboard views">
+          {portalTabs.map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+              className={`shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                activeTab === tab
+                  ? "bg-indigo-600 text-white shadow-xs"
+                  : "bg-white text-slate-700 border border-slate-200 hover:bg-slate-100"
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+
+        <section className="space-y-6">
           <Link href="/resident-portal/profile" className="block rounded-2xl border border-indigo-200 bg-indigo-50 px-5 py-4 font-semibold text-indigo-800">Complete Your Profile / View Submitted Details</Link>
           {(message || error) && (
             <div
