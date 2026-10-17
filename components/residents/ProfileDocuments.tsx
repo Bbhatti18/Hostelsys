@@ -11,7 +11,7 @@ import {
 } from "@/lib/profileDocuments";
 import { compressProfileImage } from "@/lib/compressProfileImage";
 
-type DocumentEntry = {
+export type DocumentEntry = {
   slot: DocumentSlot;
   recorded: boolean;
   needsReview: boolean;
@@ -84,6 +84,7 @@ export default function ProfileDocuments({
   readOnly = false,
   onSaved,
   onBusyChange,
+  onDocumentsLoaded,
   slots = portalDocumentSlots,
 }: {
   residentId?: string;
@@ -92,6 +93,7 @@ export default function ProfileDocuments({
   readOnly?: boolean;
   onSaved?: (slot: DocumentSlot, canonicalValue?: string) => void;
   onBusyChange?: (busy: boolean) => void;
+  onDocumentsLoaded?: (documents: DocumentEntry[]) => void;
   slots?: readonly DocumentSlot[];
 }) {
   const [documents, setDocuments] = useState<DocumentEntry[]>([]);
@@ -122,8 +124,9 @@ export default function ProfileDocuments({
   const load = useCallback(async () => {
     const result = await request();
     setDocuments(result.documents);
+    onDocumentsLoaded?.(result.documents);
     return result.documents as DocumentEntry[];
-  }, [request]);
+  }, [request, onDocumentsLoaded]);
 
   useEffect(() => {
     void load().catch((e) => setError(e.message));
@@ -216,6 +219,12 @@ export default function ProfileDocuments({
               <p className="text-xs text-slate-500 pt-0.5">
                 Private uploads, up to 400 KB each. Photos: JPEG, PNG or WebP. Identity documents also accept PDF. Single document for front + back. Uploads are saved immediately; final submission locks resident changes.
               </p>
+              <div className="mt-2 flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 border border-emerald-200">
+                <svg className="h-4 w-4 shrink-0 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span>Documents are uploaded and saved automatically upon selection. You do not need to confirm final submission just to save a document.</span>
+              </div>
             </div>
           </div>
         </div>

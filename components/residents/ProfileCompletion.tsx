@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { legacyEmergencyContact, profileFields, type EmergencyContact } from "@/lib/residentProfile";
 import { portalDocumentSlots } from "@/lib/profileDocuments";
 import EmergencyContacts from "./EmergencyContacts";
-import ProfileDocuments from "./ProfileDocuments";
+import ProfileDocuments, { type DocumentEntry } from "./ProfileDocuments";
 
 type ProfileData = {
   resident: Record<string, string | null>;
@@ -25,6 +25,7 @@ export default function ProfileCompletion({
   const [data, setData] = useState<ProfileData | null>(null);
   const [details, setDetails] = useState<Record<string, string>>({});
   const [contacts, setContacts] = useState<EmergencyContact[]>([]);
+  const [loadedDocs, setLoadedDocs] = useState<DocumentEntry[]>([]);
   const [review, setReview] = useState(false);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -60,6 +61,43 @@ export default function ProfileCompletion({
     void load().catch((e) => setError(e.message));
   }, [load]);
 
+  function validateBeforeReview(): string[] {
+    const missing: string[] = [];
+    const cnicVal = (data?.resident.cnic || details.cnic || "").trim();
+    const fatherVal = (data?.resident.father_name || details.father_name || "").trim();
+    const guardianCnicVal = (data?.resident.guardian_cnic || details.guardian_cnic || "").trim();
+    const guardianPhoneVal = (data?.resident.guardian_phone || details.guardian_phone || "").trim();
+
+    if (!cnicVal) missing.push("Resident CNIC / ID");
+    if (!fatherVal) missing.push("Father's Name");
+    if (!guardianCnicVal) missing.push("Guardian CNIC");
+    if (!guardianPhoneVal) missing.push("Guardian Phone");
+
+    const hasLegacyContact = Boolean(
+      (data?.resident.emergency_contact || "").trim() &&
+      (data?.resident.emergency_contact_name || "").trim() &&
+      (data?.resident.emergency_contact_relationship || "").trim()
+    );
+    const hasValidContact = contacts.some(
+      (c) => (c.contact_name || "").trim() && (c.relationship || "").trim() && (c.phone || "").trim()
+    );
+    const hasExistingContact = (data?.contacts || []).length > 0;
+    if (!hasLegacyContact && !hasValidContact && !hasExistingContact) {
+      missing.push("At least one Emergency Contact (Name, Relationship & Phone)");
+    }
+
+    if (loadedDocs.length > 0) {
+      const hasPhoto = loadedDocs.find((d) => d.slot === "photo")?.recorded || Boolean(data?.resident.photo_url);
+      const hasResidentFront = loadedDocs.find((d) => d.slot === "resident_front")?.recorded || Boolean(data?.resident.id_card_url);
+      const hasGuardianFront = loadedDocs.find((d) => d.slot === "guardian_front")?.recorded;
+      if (!hasPhoto) missing.push("Resident Photo");
+      if (!hasResidentFront) missing.push("Resident CNIC (Front + Back)");
+      if (!hasGuardianFront) missing.push("Guardian CNIC (Front + Back)");
+    }
+
+    return missing;
+  }
+
   async function save(submit: boolean) {
     setBusy(true);
     setError("");
@@ -81,6 +119,9 @@ export default function ProfileCompletion({
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to save profile.");
+      if (submit) {
+        setReview(false);
+      }
     } finally {
       setBusy(false);
     }
@@ -246,7 +287,12 @@ export default function ProfileCompletion({
             {fields(["resident_identity_type", "guardian_identity_type"])}
             <ProfileDocuments
               onBusyChange={setUploading}
-              readOnly={locked || review}
+              readOnly={locked}
+              onDocumentsLoaded={setLoadedDocs}
+              onSaved={() => {
+                setMessage("Document uploaded and saved successfully! Uploaded documents are saved automatically.");
+                setError("");
+              }}
               residentType={data.resident.resident_identity_type || details.resident_identity_type || "CNIC"}
               guardianType={data.resident.guardian_identity_type || details.guardian_identity_type || "CNIC"}
               slots={portalDocumentSlots}
@@ -302,6 +348,16 @@ export default function ProfileCompletion({
                     <button
                       type="button"
                       onClick={() => {
+                        setMessage("");
+                        const missing = validateBeforeReview();
+                        if (missing.length > 0) {
+                          setError(
+                            "Please provide the following before final submission: " +
+                              missing.join(", ") +
+                              ". (Note: Any uploaded documents and filled details are already preserved)."
+                          );
+                          return;
+                        }
                         setError("");
                         setReview(true);
                       }}
