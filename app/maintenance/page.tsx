@@ -15,6 +15,7 @@ import { getSupabaseErrorMessage } from "@/lib/supabaseErrors";
 import { optimizeImageForUpload, safeStorageFileName, validateImageFile } from "@/lib/imageValidation";
 import { MAINTENANCE_PHOTO_BUCKET, maintenancePhotoUrl } from "@/lib/maintenanceStorage";
 import PrivateStorageLinks from "@/components/storage/PrivateStorageLinks";
+import { notifyMaintenanceCompleted } from "@/lib/maintenanceNotificationClient";
 
 type GenericRow = Record<string, unknown>;
 
@@ -545,10 +546,20 @@ export default function MaintenancePage() {
         }
       }
 
+      let emailNotice = "";
+      const wasCompleted = currentRequest?.status === "Completed";
+      const isNowCompleted = form.status === "Completed";
+      if (isNowCompleted && !wasCompleted) {
+        const notif = await notifyMaintenanceCompleted(saved.id);
+        if (notif.emailSent && notif.recipientEmail) {
+          emailNotice = ` Resolution email sent to ${notif.recipientEmail}.`;
+        }
+      }
+
       setMessage(
         editingId
-          ? "Maintenance request updated successfully."
-          : "Maintenance request added successfully."
+          ? `Maintenance request updated successfully.${emailNotice}`
+          : `Maintenance request added successfully.${emailNotice}`
       );
 
       resetForm();
@@ -694,7 +705,12 @@ export default function MaintenancePage() {
       if (updateErr) {
         setError(getSupabaseErrorMessage(updateErr, "Failed to mark maintenance request as completed."));
       } else {
-        setMessage(`Maintenance request ${completeModalRequest.request_number} marked as Completed.`);
+        const notif = await notifyMaintenanceCompleted(completeModalRequest.id);
+        const emailMsg =
+          notif.emailSent && notif.recipientEmail
+            ? ` Resolution email sent to ${notif.recipientEmail}.`
+            : "";
+        setMessage(`Maintenance request ${completeModalRequest.request_number} marked as Completed.${emailMsg}`);
         setCompleteModalRequest(null);
         await refresh();
       }

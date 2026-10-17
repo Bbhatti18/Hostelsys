@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { maintenancePhotoUrl } from "@/lib/maintenanceStorage";
+import { notifyMaintenanceCompleted } from "@/lib/maintenanceNotificationClient";
 
 type Row = Record<string, unknown>;
 
@@ -226,8 +227,14 @@ export default function MaintenanceDetailPage() {
         throw new Error(updateErr.message || "Failed to complete maintenance request.");
       }
 
+      const notif = await notifyMaintenanceCompleted(request.id);
+      const emailMsg =
+        notif.emailSent && notif.recipientEmail
+          ? ` Resolution email sent to ${notif.recipientEmail}.`
+          : "";
+
       setShowCompleteModal(false);
-      setSuccessMessage("Maintenance request marked as Completed!");
+      setSuccessMessage(`Maintenance request marked as Completed!${emailMsg}`);
       setTimeout(() => setSuccessMessage(""), 5000);
       await load();
     } catch (err) {

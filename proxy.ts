@@ -50,6 +50,7 @@ const selfAuthenticatedApiPaths = new Set([
   "/api/residents/create-login/reset-password",
   "/api/meter-reading",
   "/api/meter-reading/config",
+  "/api/maintenance/notify-completed",
 ]);
 
 function isAdminRoute(pathname: string) {
