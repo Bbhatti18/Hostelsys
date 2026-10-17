@@ -402,44 +402,48 @@ export default function AdmissionsPage() {
       return;
     }
 
-    const payload = {
-      resident_id: residentId,
-      admission_date: form.admission_date,
-      expected_leaving_date: form.expected_leaving_date || null,
-      monthly_rent: Number(form.monthly_rent) || 0,
-      security_deposit:
-        previousAdmission.status === "Pending"
-          ? Number(form.security_deposit || 0)
-          : previousAdmission.security_deposit,
-      deposit_status: previousAdmission.deposit_status,
-      notice_period_days: Number(form.notice_period_days) || 30,
-      status: previousAdmission.status,
-      notes: form.notes.trim() || null,
-      updated_at: new Date().toISOString(),
-    };
-
-    const { data: updatedAdmission, error: updateError } = await supabase
-      .from("admissions")
-      .update(payload)
-      .eq("id", editingId)
-      .eq("status", previousAdmission.status)
-      .select("id")
-      .maybeSingle();
-
-    if (updateError || !updatedAdmission) {
-      setError(
-        updateError
-          ? updateError.code === "P0001" ? updateError.message : getSupabaseErrorMessage(
-              updateError,
-              "Unable to update this admission. Please try again.",
-            )
-          : "The admission status changed before the update completed. Refresh and try again.",
-      );
+    let { data: sessionData } = await supabase.auth.getSession();
+    if (!sessionData.session?.access_token) {
+      const refreshed = await supabase.auth.refreshSession();
+      sessionData = refreshed.data;
+    }
+    const token = sessionData.session?.access_token;
+    if (!token) {
+      setError("Your admin session could not be verified. Please refresh and try again.");
       setSaving(false);
       return;
     }
 
-    setMessage("Admission updated successfully.");
+    const response = await fetch("/api/admissions/update", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        id: editingId,
+        admission_date: form.admission_date,
+        expected_leaving_date: form.expected_leaving_date || null,
+        monthly_rent: Number(form.monthly_rent) || 0,
+        security_deposit: Number(form.security_deposit || 0),
+        notice_period_days: Number(form.notice_period_days) || 30,
+        notes: form.notes.trim() || null,
+      }),
+    });
+
+    const resData = (await response.json().catch(() => null)) as {
+      success?: boolean;
+      message?: string;
+      error?: string;
+    } | null;
+
+    if (!response.ok || !resData?.success) {
+      setError(resData?.error || "Unable to update this admission. Please try again.");
+      setSaving(false);
+      return;
+    }
+
+    setMessage(resData.message || "Admission updated successfully.");
     closeEditForm();
     await refresh();
     setAdmissionDataVersion((current) => current + 1);
@@ -972,18 +976,7 @@ export default function AdmissionsPage() {
                   />
                 </Field>
 
-                <Field
-                  label={
-                    <span className="flex items-center gap-1.5">
-                      <span>Security Deposit</span>
-                      {Boolean(editingId && form.status !== "Pending") && (
-                        <span className="inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 border border-amber-200">
-                          Locked ({form.status})
-                        </span>
-                      )}
-                    </span>
-                  }
-                >
+                <Field label="Security Deposit">
                   <input
                     type="number"
                     min="0"
@@ -992,13 +985,13 @@ export default function AdmissionsPage() {
                     onChange={(event) =>
                       updateField("security_deposit", event.target.value)
                     }
-                    className={`${inputClass} ${editingId && form.status !== "Pending" ? "bg-slate-100 cursor-not-allowed text-slate-500" : ""}`}
+                    className={inputClass}
                     placeholder="15000"
-                    disabled={saving || Boolean(editingId && form.status !== "Pending")}
+                    disabled={saving}
                   />
                   {Boolean(editingId && form.status !== "Pending") && (
-                    <p className="mt-1 text-xs text-amber-700">
-                      Security deposit requirement is locked for Active admissions to preserve contractual terms and ledger records. To adjust deposit balances, use Billing.
+                    <p className="mt-1 text-xs text-slate-500">
+                      Updating deposit for an active admission will automatically reconcile the security deposit bill.
                     </p>
                   )}
                 </Field>
