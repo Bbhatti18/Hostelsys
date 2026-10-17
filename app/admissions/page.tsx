@@ -407,7 +407,10 @@ export default function AdmissionsPage() {
       admission_date: form.admission_date,
       expected_leaving_date: form.expected_leaving_date || null,
       monthly_rent: Number(form.monthly_rent) || 0,
-      security_deposit: Number(form.security_deposit || 0),
+      security_deposit:
+        previousAdmission.status === "Pending"
+          ? Number(form.security_deposit || 0)
+          : previousAdmission.security_deposit,
       deposit_status: previousAdmission.deposit_status,
       notice_period_days: Number(form.notice_period_days) || 30,
       status: previousAdmission.status,
@@ -969,7 +972,18 @@ export default function AdmissionsPage() {
                   />
                 </Field>
 
-                <Field label="Security Deposit">
+                <Field
+                  label={
+                    <span className="flex items-center gap-1.5">
+                      <span>Security Deposit</span>
+                      {Boolean(editingId && form.status !== "Pending") && (
+                        <span className="inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 border border-amber-200">
+                          Locked ({form.status})
+                        </span>
+                      )}
+                    </span>
+                  }
+                >
                   <input
                     type="number"
                     min="0"
@@ -978,10 +992,15 @@ export default function AdmissionsPage() {
                     onChange={(event) =>
                       updateField("security_deposit", event.target.value)
                     }
-                    className={inputClass}
+                    className={`${inputClass} ${editingId && form.status !== "Pending" ? "bg-slate-100 cursor-not-allowed text-slate-500" : ""}`}
                     placeholder="15000"
-                    disabled={saving}
+                    disabled={saving || Boolean(editingId && form.status !== "Pending")}
                   />
+                  {Boolean(editingId && form.status !== "Pending") && (
+                    <p className="mt-1 text-xs text-amber-700">
+                      Security deposit requirement is locked for Active admissions to preserve contractual terms and ledger records. To adjust deposit balances, use Billing.
+                    </p>
+                  )}
                 </Field>
 
                 <Field label="Deposit Status">
@@ -1417,7 +1436,7 @@ function Field({
   wide = false,
   children,
 }: {
-  label: string;
+  label: ReactNode;
   wide?: boolean;
   children: ReactNode;
 }) {
