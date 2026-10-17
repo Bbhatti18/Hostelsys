@@ -164,12 +164,64 @@ export default function ResidentPortalPage() {
         isNoticeVisibleToResident(notice, residentId, currentRoomId, undefined, selectedNoticeIds),
     );
 
+    let followupsData: Array<{ bill_id?: string; followups?: Array<Record<string, unknown>> }> = [];
+    try {
+      const followupsResult = await supabase.rpc("payment_followup_data");
+      if (Array.isArray(followupsResult.data)) {
+        followupsData = followupsResult.data;
+      }
+    } catch {
+      // non-blocking
+    }
+
+    const followupsByBill = new Map<
+      string,
+      {
+        remaining_payment_date: string | null;
+        remaining_payment_amount: number | null;
+        remaining_payment_note: string | null;
+        remaining_payment_status: string | null;
+      }
+    >();
+
+    for (const item of followupsData) {
+      const billId = String(item.bill_id || "");
+      if (!billId) continue;
+      const followupsList = Array.isArray(item.followups) ? item.followups : [];
+      const commitment =
+        followupsList.find(
+          (f: Record<string, unknown>) => f.kind === "commitment" && f.status !== "Resolved"
+        ) ||
+        followupsList.find((f: Record<string, unknown>) => f.kind === "commitment") ||
+        followupsList[0];
+
+      if (commitment) {
+        followupsByBill.set(billId, {
+          remaining_payment_date: commitment.due_date ? String(commitment.due_date) : null,
+          remaining_payment_amount: commitment.amount ? Number(commitment.amount) : null,
+          remaining_payment_note: commitment.note ? String(commitment.note) : null,
+          remaining_payment_status: commitment.status ? String(commitment.status) : null,
+        });
+      }
+    }
+
+    const billsWithFollowups = (protectedData.bills ?? []).map((bill) => {
+      const followup = followupsByBill.get(String(bill.id || ""));
+      return {
+        ...bill,
+        remaining_payment_date: followup?.remaining_payment_date ?? null,
+        remaining_payment_amount: followup?.remaining_payment_amount ?? null,
+        remaining_payment_note: followup?.remaining_payment_note ?? null,
+        remaining_payment_status: followup?.remaining_payment_status ?? null,
+      };
+    });
+
     setResident(protectedData.resident);
     setAdmission(activeAdmission);
     setRoom(protectedData.room);
     setBed(protectedData.bed);
     setContract(protectedData.contract);
-    setBills(protectedData.bills);
+    setBills(billsWithFollowups);
     setPayments(protectedData.payments);
     setReceipts(protectedData.receipts);
     setNotices(filteredNotices);

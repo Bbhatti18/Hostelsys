@@ -121,9 +121,14 @@ export function buildResidentFinancialSummary({
       const total = roundMoney(numberValue(bill.total_amount));
       const verifiedPaid = verifiedByBill.get(id) ?? 0;
       const appliedPaid = Math.min(verifiedPaid, total);
-      const dueDate = value(bill, "due_date") ? String(value(bill, "due_date")).slice(0, 10) : null;
+      const balance = Math.max(roundMoney(total - appliedPaid), 0);
+      const dueDate = (balance > 0 && value(bill, "remaining_payment_date"))
+        ? String(value(bill, "remaining_payment_date")).slice(0, 10)
+        : value(bill, "due_date")
+          ? String(value(bill, "due_date")).slice(0, 10)
+          : null;
       const status = deriveBillStatus(total, appliedPaid, dueDate, String(value(bill, "bill_status") ?? ""));
-      return { bill, id, total, verifiedPaid, appliedPaid, balance: Math.max(roundMoney(total - appliedPaid), 0), dueDate, status, month: monthValue(bill.billing_month) };
+      return { bill, id, total, verifiedPaid, appliedPaid, balance, dueDate, status, month: monthValue(bill.billing_month) };
     })
     .sort((a, b) => b.month.localeCompare(a.month));
 
