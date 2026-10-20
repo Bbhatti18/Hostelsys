@@ -52,6 +52,7 @@ const selfAuthenticatedApiPaths = new Set([
   "/api/meter-reading/config",
   "/api/maintenance/notify-completed",
   "/api/admissions/update",
+  "/api/admissions/deposit/settle",
 ]);
 
 function isAdminRoute(pathname: string) {

@@ -44,6 +44,12 @@ import {
   DEFAULT_UNIT_RATE,
 } from "@/lib/meterReading";
 import FineWaiverManagement from "@/components/billing/FineWaiverManagement";
+import ReleaseDepositModal from "@/components/billing/ReleaseDepositModal";
+import {
+  parseDepositSettlement,
+  getDepositDisplayInfo,
+  type DepositSettlementRecord,
+} from "@/lib/depositSettlement";
 
 type GenericRow = Record<string, unknown>;
 
@@ -880,6 +886,19 @@ function BillingContent() {
   const [requestDue, setRequestDue] = useState("");
   const [requestReason, setRequestReason] = useState("");
   const [requestBusy, setRequestBusy] = useState(false);
+  const [settleDepositModal, setSettleDepositModal] = useState<{
+    isOpen: boolean;
+    bill: Bill | null;
+    residentName: string;
+    depositAmount: number;
+    settlement: DepositSettlementRecord | null;
+  }>({
+    isOpen: false,
+    bill: null,
+    residentName: "",
+    depositAmount: 0,
+    settlement: null,
+  });
 
   useEffect(() => {
     if (!openMenuBillId) return;
@@ -3147,7 +3166,37 @@ function BillingContent() {
                         {/* 5. Status & Email */}
                         <td className="px-4 py-3 align-middle whitespace-nowrap">
                           <div className="flex flex-col items-start gap-1">
-                            {Number(bill.balance_amount) <= 0 && Number(bill.total_amount) > 0 ? (
+                            {bill.bill_type === "Security Deposit" ? (
+                              (() => {
+                                const settlement = parseDepositSettlement(bill.notes);
+                                const isSettled = Boolean(settlement);
+                                const isPaid = Number(bill.balance_amount) <= 0 && Number(bill.total_amount) > 0;
+                                const isPartiallyPaid = Number(bill.paid_amount) > 0 && Number(bill.balance_amount) > 0;
+                                const display = getDepositDisplayInfo(
+                                  isSettled ? undefined : isPaid ? "Held" : "Pending",
+                                  bill.notes,
+                                );
+
+                                return (
+                                  <>
+                                    <span
+                                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold border ${display.badgeClass}`}
+                                    >
+                                      {display.label}
+                                    </span>
+                                    {settlement ? (
+                                      <span className="text-[10px] text-slate-500">
+                                        {settlement.refundMethod || "Settled"} • {settlement.settledAt.slice(0, 10)}
+                                      </span>
+                                    ) : isPartiallyPaid ? (
+                                      <span className="text-[10px] text-amber-700">
+                                        Partially Paid ({money(bill.paid_amount)})
+                                      </span>
+                                    ) : null}
+                                  </>
+                                );
+                              })()
+                            ) : Number(bill.balance_amount) <= 0 && Number(bill.total_amount) > 0 ? (
                               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-800">
                                 <span className="text-emerald-600 font-extrabold">✓</span> Paid
                               </span>
@@ -3195,6 +3244,42 @@ function BillingContent() {
                                 </svg>
                                 Verify
                               </button>
+                            )}
+
+                            {/* Security Deposit Release / Settle Button */}
+                            {bill.bill_type === "Security Deposit" && (Number(bill.paid_amount) > 0 || Number(bill.balance_amount) <= 0) && (
+                              (() => {
+                                const settlement = parseDepositSettlement(bill.notes);
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSettleDepositModal({
+                                        isOpen: true,
+                                        bill,
+                                        residentName: residentName(resident),
+                                        depositAmount: Number(bill.paid_amount || bill.total_amount),
+                                        settlement,
+                                      });
+                                    }}
+                                    className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold shadow-2xs transition ${
+                                      settlement
+                                        ? "bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300"
+                                        : "bg-teal-600 text-white hover:bg-teal-700"
+                                    }`}
+                                    title={
+                                      settlement
+                                        ? "Edit Deposit Settlement (Full, Partial, or No Refund)"
+                                        : "Release Deposit (Fully Refunded, Partially Refunded, or No Refund)"
+                                    }
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    {settlement ? "Settled" : "Release Deposit"}
+                                  </button>
+                                );
+                              })()
                             )}
 
                             {/* Quick Record Payment */}
@@ -3338,6 +3423,28 @@ function BillingContent() {
                                     Download Voucher
                                   </button>
 
+                                  {bill.bill_type === "Security Deposit" && (Number(bill.paid_amount) > 0 || Number(bill.balance_amount) <= 0) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenMenuBillId(null);
+                                        setSettleDepositModal({
+                                          isOpen: true,
+                                          bill,
+                                          residentName: residentName(resident),
+                                          depositAmount: Number(bill.paid_amount || bill.total_amount),
+                                          settlement: parseDepositSettlement(bill.notes),
+                                        });
+                                      }}
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-teal-700 hover:bg-teal-50"
+                                    >
+                                      <svg className="w-3.5 h-3.5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                      </svg>
+                                      {parseDepositSettlement(bill.notes) ? "Edit Settlement" : "Release Deposit"}
+                                    </button>
+                                  )}
+
                                   <div className="my-1 border-t border-slate-100" />
 
                                   <button
@@ -3456,6 +3563,29 @@ function BillingContent() {
           </div>
         </section>
           </>
+        )}
+
+        {settleDepositModal.isOpen && (
+          <ReleaseDepositModal
+            isOpen={settleDepositModal.isOpen}
+            onClose={() =>
+              setSettleDepositModal((prev) => ({ ...prev, isOpen: false }))
+            }
+            billId={settleDepositModal.bill?.id}
+            admissionId={settleDepositModal.bill?.admission_id || undefined}
+            residentName={settleDepositModal.residentName}
+            depositAmount={settleDepositModal.depositAmount}
+            existingSettlement={settleDepositModal.settlement}
+            onSettled={async () => {
+              setSettleDepositModal((prev) => ({ ...prev, isOpen: false }));
+              await refresh();
+              pushToast(
+                "success",
+                "Deposit Updated",
+                "Security deposit settlement recorded successfully.",
+              );
+            }}
+          />
         )}
       </div>
     </main>

@@ -13,6 +13,12 @@ import {
 } from "react";
 import MoveResident from "@/components/admissions/MoveResident";
 import AdmissionForm from "@/components/admissions/AdmissionForm";
+import ReleaseDepositModal from "@/components/billing/ReleaseDepositModal";
+import {
+  parseDepositSettlement,
+  getDepositDisplayInfo,
+  type DepositSettlementRecord,
+} from "@/lib/depositSettlement";
 import {
   normalizeBedLabel,
 } from "@/lib/bedLabels";
@@ -163,6 +169,19 @@ export default function AdmissionsPage() {
   const [moving, setMoving] = useState<Admission | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showEditForm, setShowEditForm] = useState(false);
+  const [releasingAdmission, setReleasingAdmission] = useState<{
+    isOpen: boolean;
+    admission: Admission | null;
+    residentName: string;
+    depositAmount: number;
+    settlement: DepositSettlementRecord | null;
+  }>({
+    isOpen: false,
+    admission: null,
+    residentName: "",
+    depositAmount: 0,
+    settlement: null,
+  });
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("Current");
@@ -426,6 +445,7 @@ export default function AdmissionsPage() {
         expected_leaving_date: form.expected_leaving_date || null,
         monthly_rent: Number(form.monthly_rent) || 0,
         security_deposit: Number(form.security_deposit || 0),
+        deposit_status: form.deposit_status,
         notice_period_days: Number(form.notice_period_days) || 30,
         notes: form.notes.trim() || null,
       }),
@@ -880,6 +900,25 @@ export default function AdmissionsPage() {
 
         {moving && <MoveResident admission={moving} residentName={residents.find(r => r.id === moving.resident_id)?.full_name || "Resident"}
           onClose={() => setMoving(null)} onSaved={async () => { setMoving(null); await refresh(); setAdmissionDataVersion(v => v + 1); setMessage("Resident moved successfully."); }} />}
+
+        {releasingAdmission.isOpen && releasingAdmission.admission && (
+          <ReleaseDepositModal
+            isOpen={releasingAdmission.isOpen}
+            onClose={() =>
+              setReleasingAdmission((prev) => ({ ...prev, isOpen: false }))
+            }
+            admissionId={releasingAdmission.admission.id}
+            residentName={releasingAdmission.residentName}
+            depositAmount={releasingAdmission.depositAmount}
+            existingSettlement={releasingAdmission.settlement}
+            onSettled={async () => {
+              setReleasingAdmission((prev) => ({ ...prev, isOpen: false }));
+              await refresh();
+              setAdmissionDataVersion((v) => v + 1);
+              setMessage("Security deposit settlement recorded successfully.");
+            }}
+          />
+        )}
         <AdmissionForm
           onSaved={refresh}
           refreshKey={admissionDataVersion}
@@ -997,19 +1036,44 @@ export default function AdmissionsPage() {
                 </Field>
 
                 <Field label="Deposit Status">
-                  <select
-                    value={form.deposit_status}
-                    onChange={(event) =>
-                      updateField("deposit_status", event.target.value as DepositStatus)
-                    }
-                    className={inputClass}
-                    disabled={saving}
-                  >
-                    <option value="Pending">Pending</option>
-                    <option value="Held">Held</option>
-                    <option value="Released">Released</option>
-                    <option value="Deducted">Deducted</option>
-                  </select>
+                  <div className="flex flex-col gap-2">
+                    <select
+                      value={form.deposit_status}
+                      onChange={(event) =>
+                        updateField("deposit_status", event.target.value as DepositStatus)
+                      }
+                      className={inputClass}
+                      disabled={saving}
+                    >
+                      <option value="Pending">Pending</option>
+                      <option value="Held">Held</option>
+                      <option value="Released">Released (Fully Refunded)</option>
+                      <option value="Deducted">Deducted (Partially / No Refund)</option>
+                    </select>
+
+                    {editingId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const res = residents.find((r) => r.id === form.resident_id);
+                          const parsed = parseDepositSettlement(form.notes);
+                          setReleasingAdmission({
+                            isOpen: true,
+                            admission: admissions.find((a) => a.id === editingId) || null,
+                            residentName: res?.full_name || "Resident",
+                            depositAmount: Number(form.security_deposit || 0),
+                            settlement: parsed,
+                          });
+                        }}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-teal-300 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-800 hover:bg-teal-100 transition shadow-2xs"
+                      >
+                        <svg className="w-3.5 h-3.5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Release Deposit (Fully / Partially / No Refund)
+                      </button>
+                    )}
+                  </div>
                 </Field>
 
                 <Field label="Notice Period (Days)">
@@ -1249,13 +1313,34 @@ const rent = getAdmissionRent(admission, depositBills, depositPayments);
     Deposit: {money(deposit.required)}
   </p>
 
-  <span
-    className={`mt-2 inline-flex rounded-full px-3 py-1 text-xs font-bold ${depositStatusClass(
-      deposit.state
-    )}`}
-  >
-    {depositStateLabel(deposit.state)}
-  </span>
+  {(() => {
+    const depositDisplay = getDepositDisplayInfo(admission.deposit_status, admission.notes);
+    const settlement = depositDisplay.settlement;
+    if (settlement || admission.deposit_status === "Released" || admission.deposit_status === "Deducted") {
+      return (
+        <div className="mt-2 flex flex-col items-start gap-0.5">
+          <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold border ${depositDisplay.badgeClass}`}>
+            {depositDisplay.label}
+          </span>
+          {settlement && (
+            <span className="text-[10px] text-slate-500">
+              {settlement.refundMethod || "Settled"} • {settlement.settledAt.slice(0, 10)}
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <span
+        className={`mt-2 inline-flex rounded-full px-3 py-1 text-xs font-bold ${depositStatusClass(
+          deposit.state
+        )}`}
+      >
+        {depositStateLabel(deposit.state)}
+      </span>
+    );
+  })()}
 </td>
 
 <td className="px-5 py-4 text-sm">
@@ -1303,6 +1388,31 @@ const rent = getAdmissionRent(admission, depositBills, depositPayments);
                           ) : (
                             <div className="flex flex-wrap gap-2">
                               <button type="button" className="rounded-lg border px-3 py-2 text-xs font-semibold text-indigo-700" onClick={() => setMoving(admission)}>Move / Change Allocation</button>
+
+                              {/* Release / Settle Deposit */}
+                              {(admission.deposit_status === "Held" || Boolean(parseDepositSettlement(admission.notes)) || admission.deposit_status === "Released" || admission.deposit_status === "Deducted") && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const parsed = parseDepositSettlement(admission.notes);
+                                    setReleasingAdmission({
+                                      isOpen: true,
+                                      admission,
+                                      residentName: resident?.full_name || "Resident",
+                                      depositAmount: Number(admission.security_deposit || 0),
+                                      settlement: parsed,
+                                    });
+                                  }}
+                                  className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                                    parseDepositSettlement(admission.notes)
+                                      ? "border-slate-300 text-slate-700 hover:bg-slate-50"
+                                      : "border-teal-300 bg-teal-50 text-teal-800 hover:bg-teal-100"
+                                  }`}
+                                  title="Release security deposit (Fully Refunded, Partially Refunded, or No Refund)"
+                                >
+                                  {parseDepositSettlement(admission.notes) ? "Deposit Settled" : "Release Deposit"}
+                                </button>
+                              )}
                               {admission.status === "Pending" &&
                                 contract &&
                                 ["Submitted", "Signed"].includes(

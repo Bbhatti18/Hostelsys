@@ -19,6 +19,7 @@ export async function POST(request: NextRequest) {
       expected_leaving_date?: unknown;
       monthly_rent?: unknown;
       security_deposit?: unknown;
+      deposit_status?: unknown;
       notice_period_days?: unknown;
       notes?: unknown;
     } | null;
@@ -37,6 +38,12 @@ export async function POST(request: NextRequest) {
     }
 
     const noticePeriod = Number(body?.notice_period_days ?? 30);
+    const validDepositStatuses = ["Pending", "Held", "Released", "Deducted"];
+    const depositStatus =
+      typeof body?.deposit_status === "string" &&
+      validDepositStatuses.includes(body.deposit_status)
+        ? body.deposit_status
+        : undefined;
 
     // Fetch existing admission
     const { data: previousAdmission, error: fetchErr } = await supabaseAdmin
@@ -59,6 +66,7 @@ export async function POST(request: NextRequest) {
       monthly_rent: monthlyRent,
       notice_period_days: Number.isFinite(noticePeriod) && noticePeriod >= 0 ? noticePeriod : 30,
       notes: typeof body?.notes === "string" && body.notes.trim() ? body.notes.trim() : null,
+      ...(depositStatus ? { deposit_status: depositStatus } : {}),
       updated_at: new Date().toISOString(),
     };
 
