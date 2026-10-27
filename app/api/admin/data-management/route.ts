@@ -146,7 +146,7 @@ export async function POST(request: NextRequest) {
           transactionRollbackReason: sanitized.message,
         });
         await recordFailure(admin, "FULL_RESET", error.message);
-        return json({ error: "The hostel reset could not be completed. No partial reset was committed." }, 500);
+        return json({ error: sanitized.message || "The hostel reset could not be completed. No partial reset was committed." }, 500);
       }
       diagnostic("rpc_success", { function: "admin_full_hostel_reset" });
       revalidateOperationalPages();
@@ -186,7 +186,7 @@ export async function POST(request: NextRequest) {
           transactionRollbackReason: sanitized.message,
         });
         await recordFailure(admin, "RESIDENT_DELETE", error.message, resident);
-        return json({ error: "The resident could not be removed. No partial deletion was committed." }, 500);
+        return json({ error: sanitized.message || "The resident could not be removed. No partial deletion was committed." }, 500);
       }
       diagnostic("rpc_success", { function: "admin_delete_resident_data" });
       revalidateOperationalPages();

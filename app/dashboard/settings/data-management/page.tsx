@@ -48,6 +48,23 @@ const countLabels: Record<string, string> = {
   inventory_movements: "Inventory movements",
   complaints: "Complaints",
   visitors: "Visitor records",
+  payment_followups: "Payment follow-ups",
+  rent_reminder_deliveries: "Rent reminders",
+  fine_waiver_requests: "Fine waiver requests",
+  late_fees: "Late fee records",
+  late_fee_payment_allocations: "Late fee allocations",
+  late_fee_history: "Late fee history",
+  rent_period_corrections: "Rent period corrections",
+  staff_payment_allocation_audit: "Staff payment audits",
+  payment_allocations: "Payment allocations",
+  payment_status_history: "Payment history",
+  resident_profile_documents: "Profile documents",
+  resident_emergency_contacts: "Emergency contacts",
+  resident_profile_corrections: "Profile corrections",
+  resident_profile_completions: "Profile completions",
+  historical_payment_evidence: "Payment evidence",
+  historical_payment_evidence_reviews: "Evidence reviews",
+  admission_allocation_history: "Allocation history",
 };
 
 function money(value: number) {
