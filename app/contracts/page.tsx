@@ -198,7 +198,7 @@ export default function ContractsPage() {
       { data: templatesData, error: templatesError },
     ] = await Promise.all([
       supabase.from("contracts").select("id, contract_number, resident_id, admission_id, room_id, bed_id, start_date, end_date, monthly_rent, security_deposit, notice_period_days, resident_signature_status, owner_signature_status, owner_signature_name, signed_at, status, contract_content, created_at, updated_at").order("created_at", { ascending: false }),
-      supabase.from("residents").select("id, full_name, status").order("full_name"),
+      supabase.from("residents").select("id, full_name, status").neq("status", "Archived").order("full_name"),
       supabase.from("admissions").select("*").order("created_at", { ascending: false }),
       supabase.from("rooms").select("id, room_number").order("room_number"),
       supabase.from("beds").select("id, bed_number").order("bed_number"),
@@ -250,9 +250,10 @@ export default function ContractsPage() {
     const query = search.trim().toLowerCase();
 
     return contracts.filter((contract) => {
-      const residentName =
-        residents.find((resident) => resident.id === contract.resident_id)
-          ?.full_name ?? "";
+      const resident = residents.find((r) => r.id === contract.resident_id);
+      if (!resident || resident.status === "Archived") return false;
+
+      const residentName = resident.full_name ?? "";
 
       const matchesSearch =
         !query ||

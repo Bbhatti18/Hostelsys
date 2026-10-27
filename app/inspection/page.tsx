@@ -61,7 +61,7 @@ export default function InspectionPage() {
     const [inspectionResult, legacyResult, residentResult, roomResult, admissionResult, bedResult] = await Promise.all([
       supabase.from("room_inspections").select("*").order("inspection_date", { ascending: false }),
       supabase.from("inspections").select("id,resident_id,room_id,inspection_date,before_photo,after_photo,damage_notes").order("inspection_date", { ascending: false }),
-      supabase.from("residents").select("*").order("created_at", { ascending: true }),
+      supabase.from("residents").select("*").neq("status", "Archived").order("created_at", { ascending: true }),
       supabase.from("rooms").select("*").order("room_number", { ascending: true }),
       supabase.from("admissions").select("*").order("created_at", { ascending: false }),
       supabase.from("beds").select("id,bed_number,room_id"),
@@ -86,6 +86,7 @@ export default function InspectionPage() {
   const residentAdmissions = admissions.filter((admission) => text(admission.resident_id) === form.resident_id && !["cancelled", "archived"].includes(normalized(admission.status)));
   const filtered = useMemo(() => inspections.filter((inspection) => {
     const resident = residents.find((row) => text(row.id) === inspection.resident_id);
+    if (!resident || normalized(resident.status) === "archived") return false;
     const room = rooms.find((row) => text(row.id) === inspection.room_id);
     const haystack = [inspection.inspection_number, inspection.inspection_date, inspection.inspection_type, inspection.inspector_name, display(resident, ["full_name"]), display(room, ["room_number"])].join(" ").toLowerCase();
     return (!search.trim() || haystack.includes(search.trim().toLowerCase())) &&

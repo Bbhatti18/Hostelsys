@@ -212,10 +212,12 @@ export default function AdmissionsPage() {
       supabase
         .from("admissions")
         .select("*")
+        .neq("status", "Archived")
         .order("created_at", { ascending: false }),
       supabase
         .from("residents")
         .select("id, full_name, status")
+        .neq("status", "Archived")
         .order("full_name"),
       supabase
         .from("rooms")
@@ -277,9 +279,11 @@ export default function AdmissionsPage() {
     const query = search.trim().toLowerCase();
 
     return admissions.filter((admission) => {
-      const residentName =
-        residents.find((resident) => resident.id === admission.resident_id)
-          ?.full_name ?? "";
+      if (admission.status === "Archived") return false;
+      const resident = residents.find((r) => r.id === admission.resident_id);
+      if (!resident || resident.status === "Archived") return false;
+
+      const residentName = resident?.full_name ?? "";
 
       const roomNumber =
         rooms.find((room) => room.id === admission.room_id)?.room_number ?? "";

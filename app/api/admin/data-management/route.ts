@@ -70,6 +70,7 @@ export async function GET(request: NextRequest) {
     const { data, error } = await supabaseAdmin
       .from("residents")
       .select("id, resident_code, full_name, email, phone, status, admissions(id, admission_number, room_id, bed_id, status, rooms(room_number), beds(bed_number)), bills(total_amount, paid_amount, balance_amount, bill_status)")
+      .neq("status", "Archived")
       .order("full_name", { ascending: true });
 
     if (error) return json({ error: "Resident data could not be loaded." }, 500);
@@ -162,7 +163,7 @@ export async function POST(request: NextRequest) {
 
       const { data: resident } = await supabaseAdmin
         .from("residents")
-        .select("id, full_name")
+        .select("id, full_name, status")
         .eq("id", residentId)
         .maybeSingle();
       if (!resident) return json({ error: "The selected resident no longer exists." }, 404);
@@ -170,27 +171,126 @@ export async function POST(request: NextRequest) {
         return json({ error: "The resident name confirmation does not match." }, 400);
       }
 
-      diagnostic("rpc_call", { function: "admin_delete_resident_data", confirmationValid: true });
-      const { data, error } = await supabaseAdmin.rpc("admin_delete_resident_data", {
-        p_admin_user_id: admin.authUser.id,
-        p_admin_email: admin.email,
-        p_resident_id: residentId,
-        p_resident_name_confirmation: residentName,
-      });
-      if (error) {
-        const sanitized = sanitizedDatabaseError(error);
-        console.error("[admin-data-management]", {
-          event: "rpc_failure",
-          function: "admin_delete_resident_data",
-          ...sanitized,
-          transactionRollbackReason: sanitized.message,
-        });
-        await recordFailure(admin, "RESIDENT_DELETE", error.message, resident);
-        return json({ error: sanitized.message || "The resident could not be removed. No partial deletion was committed." }, 500);
+      diagnostic("resident_archive_start", { residentId, residentName });
+
+      // 1. Fetch resident admissions to free bed and update rooms
+      const { data: admissions } = await supabaseAdmin
+        .from("admissions")
+        .select("id, bed_id, room_id, status")
+        .eq("resident_id", residentId);
+
+      const admissionIds = (admissions ?? []).map((a) => a.id);
+      const bedIds = Array.from(new Set((admissions ?? []).map((a) => a.bed_id).filter(Boolean)));
+      const roomIds = Array.from(new Set((admissions ?? []).map((a) => a.room_id).filter(Boolean)));
+
+      // 2. Archive all admissions for this resident
+      if (admissionIds.length > 0) {
+        await supabaseAdmin
+          .from("admissions")
+          .update({
+            status: "Archived",
+            actual_leaving_date: new Date().toISOString().slice(0, 10),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("resident_id", residentId);
       }
-      diagnostic("rpc_success", { function: "admin_delete_resident_data" });
+
+      // 3. Vacate beds previously assigned to this resident if no other pending/active admission exists
+      for (const bedId of bedIds) {
+        const { data: otherAdmissions } = await supabaseAdmin
+          .from("admissions")
+          .select("id")
+          .eq("bed_id", bedId)
+          .in("status", ["Active", "Pending"])
+          .limit(1);
+
+        if (!otherAdmissions || otherAdmissions.length === 0) {
+          await supabaseAdmin
+            .from("beds")
+            .update({ status: "Vacant", updated_at: new Date().toISOString() })
+            .eq("id", bedId)
+            .neq("status", "Inactive");
+        }
+      }
+
+      // 4. Update room occupied bed counts
+      for (const roomId of roomIds) {
+        const { count } = await supabaseAdmin
+          .from("beds")
+          .select("id", { count: "exact", head: true })
+          .eq("room_id", roomId)
+          .ilike("status", "occupied");
+
+        await supabaseAdmin
+          .from("rooms")
+          .update({ occupied_beds: count ?? 0, updated_at: new Date().toISOString() })
+          .eq("id", roomId);
+      }
+
+      // 5. Terminate active/pending contracts
+      await supabaseAdmin
+        .from("contracts")
+        .update({ status: "Terminated", updated_at: new Date().toISOString() })
+        .eq("resident_id", residentId)
+        .neq("status", "Terminated");
+
+      // 6. Delete portal login links so resident can no longer sign in
+      await supabaseAdmin
+        .from("resident_portal_links")
+        .delete()
+        .eq("resident_id", residentId);
+
+      // 7. Cancel uncollected draft/pending bills
+      await supabaseAdmin
+        .from("bills")
+        .update({ bill_status: "Cancelled", updated_at: new Date().toISOString() })
+        .eq("resident_id", residentId)
+        .in("bill_status", ["Draft", "Pending Approval", "Pending"]);
+
+      // 8. Delete inventory assignments if any
+      await supabaseAdmin
+        .from("inventory_assignments")
+        .delete()
+        .eq("resident_id", residentId);
+
+      // 9. Update resident status to 'Archived' (soft delete)
+      const { error: archiveError } = await supabaseAdmin
+        .from("residents")
+        .update({
+          status: "Archived",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", residentId);
+
+      if (archiveError) {
+        const sanitized = sanitizedDatabaseError(archiveError);
+        console.error("[admin-data-management]", {
+          event: "archive_failure",
+          ...sanitized,
+        });
+        await recordFailure(admin, "RESIDENT_DELETE", archiveError.message, resident);
+        return json({ error: sanitized.message || "The resident could not be removed." }, 500);
+      }
+
+      // 10. Write audit trail
+      await supabaseAdmin.from("admin_data_action_audits").insert({
+        admin_user_id: admin.authUser.id,
+        admin_staff_user_id: admin.staffId,
+        admin_email: admin.email,
+        action_type: "RESIDENT_DELETE",
+        deleted_resident_id: resident.id,
+        deleted_resident_name: resident.full_name,
+        deleted_record_counts: { residents: 1, admissions: (admissions ?? []).length },
+        status: "SUCCESS",
+      });
+
+      diagnostic("resident_archive_success", { residentId });
       revalidateOperationalPages();
-      return json({ message: "Resident removed successfully", counts: (data ?? {}) as DeleteCounts });
+
+      return json({
+        message: `${resident.full_name} has been removed from the system successfully.`,
+        counts: { residents: 1, admissions: (admissions ?? []).length } as DeleteCounts,
+      });
     }
 
     return json({ error: "A valid data-management action is required." }, 400);

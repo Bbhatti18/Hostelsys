@@ -160,7 +160,7 @@ export default function PaymentVerificationPage() {
       correctionsResult,
     ] = await Promise.all([
       readDashboardRows(supabase.from("payment_receipts").select("*,late_fee_payment_allocations(payment_id)").order("created_at", { ascending: false }).order("id")),
-      supabase.from("residents").select("*"),
+      supabase.from("residents").select("*").neq("status", "Archived"),
       readDashboardRows(supabase.from("bills").select("*").order("id")),
       readDashboardRows(supabase.from("payments").select("id,resident_id,bill_id,amount,payment_status").order("id")),
       readDashboardRows(supabase.from("payment_allocations").select("payment_id,bill_id,amount").order("payment_id").order("bill_id")),
@@ -203,6 +203,7 @@ export default function PaymentVerificationPage() {
       const resident = residents.find(
         (item) => text(item.id) === receipt.resident_id
       );
+      if (!resident || resident.status === "Archived") return false;
 
       const bill = bills.find(
         (item) => text(item.id) === receipt.bill_id

@@ -153,7 +153,7 @@ export default function PaymentsPage() {
 
     const [paymentsResult, residentsResult, billsResult, allocationsResult, correctionsResult] = await Promise.all([
       readDashboardRows(supabase.from("payments").select("*").order("created_at", { ascending: false }).order("id")),
-      supabase.from("residents").select("*"),
+      supabase.from("residents").select("*").neq("status", "Archived"),
       readDashboardRows(supabase.from("bills").select("*").order("created_at", { ascending: false }).order("id")),
       readDashboardRows(supabase.from("payment_allocations").select("payment_id,bill_id,amount").order("payment_id").order("bill_id")),
       readStaffCorrections(),
@@ -232,7 +232,8 @@ export default function PaymentsPage() {
     const query = search.trim().toLowerCase();
 
     return payments.filter((payment) => {
-      const resident = residentMap.get(payment.resident_id) ?? "";
+      const resident = residentMap.get(payment.resident_id);
+      if (!resident) return false;
       const bill = payment.bill_id ? billMap.get(payment.bill_id)?.billNumber ?? "" : "Combined payment";
 
       const matchesSearch =

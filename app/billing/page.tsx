@@ -372,6 +372,7 @@ function BillingContent() {
       supabase
         .from("residents")
         .select("*")
+        .neq("status", "Archived")
         .order("created_at", { ascending: false }),
       supabase
         .from("admissions")
@@ -588,6 +589,7 @@ function BillingContent() {
       const resident = residents.find(
         (item) => text(item.id) === bill.resident_id
       );
+      if (!resident || resident.status === "Archived") return false;
 
       const searchable = [
         bill.id,
@@ -645,8 +647,12 @@ function BillingContent() {
   const summary = useMemo(() => {
     // Bills still awaiting approval are not receivables yet, and cancelled
     // bills never were, so neither belongs in the collection figures.
+    const activeResidentIds = new Set(
+      residents.filter((r) => r.status !== "Archived").map((r) => text(r.id))
+    );
     const operationalBills = bills.filter(
       (bill) =>
+        activeResidentIds.has(bill.resident_id) &&
         normalizedStatus(bill.bill_status) !== "cancelled" &&
         !isUnapprovedBill(bill.bill_status),
     );

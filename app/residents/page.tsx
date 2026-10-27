@@ -261,6 +261,7 @@ export default function ResidentsPage() {
       supabase
         .from("residents")
         .select("*")
+        .neq("status", "Archived")
         .order("created_at", { ascending: false }),
       supabase
         .from("admissions")

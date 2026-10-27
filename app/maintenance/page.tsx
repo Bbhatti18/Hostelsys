@@ -217,6 +217,7 @@ export default function MaintenancePage() {
       supabase
         .from("residents")
         .select("*")
+        .neq("status", "Archived")
         .order("created_at", { ascending: false }),
       supabase
         .from("rooms")
@@ -258,6 +259,11 @@ export default function MaintenancePage() {
     const query = search.trim().toLowerCase();
 
     return requests.filter((request) => {
+      if (request.resident_id) {
+        const res = residents.find((item) => text(item.id) === request.resident_id);
+        if (!res || res.status === "Archived") return false;
+      }
+
       const resident = residents.find(
         (item) => text(item.id) === request.resident_id
       );
