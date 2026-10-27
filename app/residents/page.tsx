@@ -30,6 +30,15 @@ import { contactRelationships, type EmergencyContact } from "@/lib/residentProfi
 
 type GenericRow = Record<string, unknown>;
 
+type ArchivedResidentMatch = {
+  id: string;
+  fullName: string;
+  cnic: string;
+  email: string;
+  phone?: string;
+  residentCode?: string;
+};
+
 type Resident = {
   id: string;
   resident_code?: string | null;
@@ -227,6 +236,8 @@ export default function ResidentsPage() {
   const [resettingPasswordId, setResettingPasswordId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [archivedPrompt, setArchivedPrompt] = useState<ArchivedResidentMatch | null>(null);
+  const [archivedResidents, setArchivedResidents] = useState<ArchivedResidentMatch[]>([]);
   const [showProfile, setShowProfile] = useState(false);
   const [profileTab, setProfileTab] = useState<ProfileTab>("Personal Information");
   const [profileLoading, setProfileLoading] = useState(false);
@@ -257,7 +268,7 @@ export default function ResidentsPage() {
     setLoading(true);
     setError("");
 
-    const [residentResult, activeAdmissionResult] = await Promise.all([
+    const [residentResult, activeAdmissionResult, archivedResult] = await Promise.all([
       supabase
         .from("residents")
         .select("*")
@@ -267,6 +278,10 @@ export default function ResidentsPage() {
         .from("admissions")
         .select("resident_id")
         .eq("status", "Active"),
+      supabase
+        .from("residents")
+        .select("id, full_name, cnic, email, phone, resident_code")
+        .eq("status", "Archived"),
     ]);
 
     const loadError = residentResult.error || activeAdmissionResult.error;
@@ -290,6 +305,19 @@ export default function ResidentsPage() {
           ),
         })),
       );
+
+      if (!archivedResult.error && archivedResult.data) {
+        setArchivedResidents(
+          archivedResult.data.map((r: GenericRow) => ({
+            id: text(r.id),
+            fullName: text(r.full_name) || "Resident",
+            cnic: text(r.cnic),
+            email: text(r.email),
+            phone: text(r.phone),
+            residentCode: text(r.resident_code),
+          })),
+        );
+      }
     }
 
     setLoading(false);
@@ -583,8 +611,25 @@ export default function ResidentsPage() {
     setResidentBackFileName("");
     setGuardianBackFile(null);
     setGuardianBackFileName("");
+    setArchivedPrompt(null);
     setShowForm(false);
   }
+
+  const liveArchivedMatch = useMemo(() => {
+    if (editingId) return null;
+    const normalizedEmail = normalizeEmail(form.email);
+    const normalizedPhone = normalizePhone(form.phone);
+    const normalizedCnic = normalizeIdentity(form.cnic);
+    if (!normalizedEmail && !normalizedPhone && !normalizedCnic) return null;
+    return (
+      archivedResidents.find((r) => {
+        const sameEmail = normalizedEmail && normalizeEmail(r.email) === normalizedEmail;
+        const samePhone = normalizedPhone && normalizePhone(r.phone) === normalizedPhone;
+        const sameCnic = normalizedCnic && normalizeIdentity(r.cnic) === normalizedCnic;
+        return sameEmail || samePhone || sameCnic;
+      }) ?? null
+    );
+  }, [form.email, form.cnic, form.phone, editingId, archivedResidents]);
 
   async function uploadCreateDocument(residentId: string, slot: "resident_back" | "guardian_front" | "guardian_back", file: File) {
     const { data } = await supabase.auth.getSession();
@@ -633,82 +678,71 @@ export default function ResidentsPage() {
   async function handleGuardianBackSelection(event: ChangeEvent<HTMLInputElement>) {
     await prepareCreateDocument(event, "guardian_back", setGuardianBackFile, setGuardianBackFileName);
   }
-  async function saveResident(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (documentsUploading) { setError("Wait for the document upload to finish before saving."); return; }
+  function validateResidentForm(): boolean {
+    if (documentsUploading) {
+      setError("Wait for the document upload to finish before saving.");
+      return false;
+    }
     if (contactsLoading) {
       setError("Emergency contacts are still loading. Reopen Edit if loading failed.");
-      return;
+      return false;
     }
-    if (extraContacts.some(contact => !contact.contact_name.trim() || !contact.relationship.trim() || !contact.phone.trim())) {
+    if (
+      extraContacts.some(
+        (contact) =>
+          !contact.contact_name.trim() ||
+          !contact.relationship.trim() ||
+          !contact.phone.trim(),
+      )
+    ) {
       setError("Complete each emergency contact name, relationship and phone.");
-      return;
+      return false;
     }
-    setSaving(true);
-    setMessage("");
-    setError("");
 
     if (!form.full_name.trim()) {
       setError("Resident name is required.");
-      setSaving(false);
-      return;
+      return false;
     }
 
     if (!form.phone.trim()) {
       setError("Phone number is required.");
-      setSaving(false);
-      return;
+      return false;
     }
 
     if (!form.email.trim()) {
       setError("Email is required.");
-      setSaving(false);
-      return;
+      return false;
     }
 
     if (!form.cnic.trim()) {
       setError("CNIC / passport is required.");
-      setSaving(false);
-      return;
+      return false;
     }
+
+    return true;
+  }
+
+  async function executeSave(targetResidentId?: string) {
+    if (!validateResidentForm()) return;
+
+    setSaving(true);
+    setMessage("");
+    setError("");
+
+    const isReEnrollment = Boolean(targetResidentId && !editingId);
+    const activeTargetId = editingId || targetResidentId;
 
     const normalizedEmail = normalizeEmail(form.email);
-    const normalizedPhone = normalizePhone(form.phone);
-    const normalizedCnic = normalizeIdentity(form.cnic);
-
-    const { data: duplicateRows, error: duplicateError } = await supabase
-      .from("residents")
-      .select("id, email, phone, cnic")
-      .order("created_at", { ascending: false });
-
-    if (duplicateError) {
-      setError(
-        getSupabaseErrorMessage(
-          duplicateError,
-          "Unable to verify resident details. Please try again.",
-        ),
-      );
-      setSaving(false);
-      return;
-    }
-
-    const duplicate = (duplicateRows ?? []).find((row: GenericRow) => {
-      const sameId = text(row.id) === editingId;
-      const sameEmail = normalizedEmail && normalizeEmail(row.email) === normalizedEmail;
-      const samePhone = normalizedPhone && normalizePhone(row.phone) === normalizedPhone;
-      const sameCnic = normalizedCnic && normalizeIdentity(row.cnic) === normalizedCnic;
-      return !sameId && (sameEmail || samePhone || sameCnic);
-    });
-
-    if (duplicate) {
-      setError("A resident with the same email, phone, or CNIC already exists.");
-      setSaving(false);
-      return;
-    }
-
     const now = new Date().toISOString();
+
+    const residentCode =
+      form.resident_code.trim() ||
+      (isReEnrollment && archivedPrompt?.residentCode
+        ? archivedPrompt.residentCode
+        : generateResidentCode(residents));
+
     const payload = {
-      resident_code: form.resident_code.trim() || generateResidentCode(residents),
+      resident_code: residentCode,
       full_name: form.full_name.trim(),
       resident_identity_type: form.resident_identity_type || null,
       guardian_identity_type: form.guardian_identity_type || null,
@@ -732,20 +766,23 @@ export default function ResidentsPage() {
       id_card_url: form.id_card_url.trim() || null,
       status: editingId ? form.status : RESIDENT_STATUS.INACTIVE,
       updated_at: now,
-      ...(editingId ? {} : { created_at: now }),
+      ...(activeTargetId ? {} : { created_at: now }),
     };
-
 
     let result;
     try {
-      result = editingId
-        ? await supabase.from("residents").update(payload).eq("id", editingId)
+      result = activeTargetId
+        ? await supabase
+            .from("residents")
+            .update(payload)
+            .eq("id", activeTargetId)
+            .select("id, full_name, email")
+            .single()
         : await supabase
             .from("residents")
             .insert(payload)
             .select("id, full_name, email")
             .single();
-
     } catch {
       setError("Unable to save resident. Please try again.");
       setSaving(false);
@@ -764,61 +801,182 @@ export default function ResidentsPage() {
       return;
     }
 
+    const savedResidentId = String(activeTargetId || result.data?.id);
+
+    if (isReEnrollment) {
+      await supabase
+        .from("resident_profile_completions")
+        .delete()
+        .eq("resident_id", savedResidentId);
+    }
+
     let successMessage = editingId
       ? "Resident updated successfully."
-      : "Resident added successfully.";
+      : isReEnrollment
+        ? `${form.full_name.trim()} re-added with fresh data successfully.`
+        : "Resident added successfully.";
 
-    if (!editingId && result.data?.id) {
+    if (!editingId && savedResidentId) {
       try {
-        const login = await ensureResidentLogin(String(result.data.id));
+        const login = await ensureResidentLogin(savedResidentId);
         successMessage = login.created
-          ? `Resident added successfully. Portal login: ${login.email} | One-time temporary password: ${login.temporaryPassword} (${login.emailSent ? "Credentials sent via email" : "Provide to resident now; not stored in database"}).`
-          : `Resident added successfully. A portal login already exists for ${login.email}.`;
+          ? `${isReEnrollment ? `${form.full_name.trim()} re-added with fresh data.` : "Resident added successfully."} Portal login: ${login.email} | One-time temporary password: ${login.temporaryPassword} (${login.emailSent ? "Credentials sent via email" : "Provide to resident now; not stored in database"}).`
+          : `${isReEnrollment ? `${form.full_name.trim()} re-added with fresh data.` : "Resident added successfully."} Portal login verified for ${login.email}.`;
       } catch (loginError) {
-        successMessage = `Resident added successfully, but the portal login could not be created automatically. ${
-          loginError instanceof Error ? loginError.message : "Please create the login later."
+        successMessage = `${isReEnrollment ? `${form.full_name.trim()} re-added with fresh data` : "Resident added successfully"}, but the portal login could not be created automatically. ${
+          loginError instanceof Error ? loginError.message : "Please check login settings later."
         }`;
       }
     }
 
-    const savedResidentId = editingId || result.data?.id;
     if (savedResidentId && extraContacts.length) {
-      const contactResult = await supabase.rpc("save_resident_emergency_contacts", { p_resident_id: savedResidentId, p_contacts: extraContacts });
+      const contactResult = await supabase.rpc("save_resident_emergency_contacts", {
+        p_resident_id: savedResidentId,
+        p_contacts: extraContacts,
+      });
       if (contactResult.error) {
-        if (!editingId) retryContactsFor.current = String(savedResidentId);
-        setEditingId(String(savedResidentId));
+        if (!editingId) retryContactsFor.current = savedResidentId;
+        setEditingId(savedResidentId);
         setMessage(successMessage);
         await refresh();
-        setError("Resident saved, but additional contacts were not saved. Retry Save Resident; do not create another resident. " + contactResult.error.message);
+        setError(
+          "Resident saved, but additional contacts were not saved. Retry Save Resident; do not create another resident. " +
+            contactResult.error.message,
+        );
         setSaving(false);
         return;
       }
     }
+
     if (savedResidentId) {
       const pendingCreateDocuments = [
-        ...(form.resident_identity_type === "Passport" ? [] : [{ slot: "resident_back" as const, file: residentBackFile, label: "Resident CNIC Back", clear: () => { setResidentBackFile(null); setResidentBackFileName(""); } }]),
-        { slot: "guardian_front" as const, file: guardianFrontFile, label: form.guardian_identity_type === "Passport" ? "Guardian Passport Identity Page" : "Guardian CNIC Front", clear: () => { setGuardianFrontFile(null); setGuardianFrontFileName(""); } },
-        ...(form.guardian_identity_type === "Passport" ? [] : [{ slot: "guardian_back" as const, file: guardianBackFile, label: "Guardian CNIC Back", clear: () => { setGuardianBackFile(null); setGuardianBackFileName(""); } }]),
-      ].filter(item => item.file);
+        ...(form.resident_identity_type === "Passport"
+          ? []
+          : [
+              {
+                slot: "resident_back" as const,
+                file: residentBackFile,
+                label: "Resident CNIC Back",
+                clear: () => {
+                  setResidentBackFile(null);
+                  setResidentBackFileName("");
+                },
+              },
+            ]),
+        {
+          slot: "guardian_front" as const,
+          file: guardianFrontFile,
+          label:
+            form.guardian_identity_type === "Passport"
+              ? "Guardian Passport Identity Page"
+              : "Guardian CNIC Front",
+          clear: () => {
+            setGuardianFrontFile(null);
+            setGuardianFrontFileName("");
+          },
+        },
+        ...(form.guardian_identity_type === "Passport"
+          ? []
+          : [
+              {
+                slot: "guardian_back" as const,
+                file: guardianBackFile,
+                label: "Guardian CNIC Back",
+                clear: () => {
+                  setGuardianBackFile(null);
+                  setGuardianBackFileName("");
+                },
+              },
+            ]),
+      ].filter((item) => item.file);
+
       for (const item of pendingCreateDocuments) {
         try {
-          await uploadCreateDocument(String(savedResidentId), item.slot, item.file!);
+          await uploadCreateDocument(savedResidentId, item.slot, item.file!);
           item.clear();
         } catch (uploadError) {
-          if (!editingId) setEditingId(String(savedResidentId));
+          if (!editingId) setEditingId(savedResidentId);
           await refresh();
           setMessage(successMessage);
-          setError(`Resident was saved, but ${item.label} was NOT uploaded. The selected file is still pending; click Update Resident to retry. ${uploadError instanceof Error ? uploadError.message : "Upload failed."}`);
+          setError(
+            `Resident was saved, but ${item.label} was NOT uploaded. The selected file is still pending; click Update Resident to retry. ${
+              uploadError instanceof Error ? uploadError.message : "Upload failed."
+            }`,
+          );
           setSaving(false);
           return;
         }
       }
     }
+
     setMessage(successMessage);
-    setMessage(successMessage);
+    setArchivedPrompt(null);
     closeForm();
     await refresh();
     setSaving(false);
+  }
+
+  async function saveResident(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!validateResidentForm()) return;
+
+    if (editingId) {
+      await executeSave();
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+    setError("");
+
+    const normalizedEmail = normalizeEmail(form.email);
+    const normalizedPhone = normalizePhone(form.phone);
+    const normalizedCnic = normalizeIdentity(form.cnic);
+
+    const { data: duplicateRows, error: duplicateError } = await supabase
+      .from("residents")
+      .select("id, email, phone, cnic, status, full_name, resident_code")
+      .order("created_at", { ascending: false });
+
+    if (duplicateError) {
+      setError(
+        getSupabaseErrorMessage(
+          duplicateError,
+          "Unable to verify resident details. Please try again.",
+        ),
+      );
+      setSaving(false);
+      return;
+    }
+
+    const duplicate = (duplicateRows ?? []).find((row: GenericRow) => {
+      const sameId = text(row.id) === editingId;
+      const sameEmail = normalizedEmail && normalizeEmail(row.email) === normalizedEmail;
+      const samePhone = normalizedPhone && normalizePhone(row.phone) === normalizedPhone;
+      const sameCnic = normalizedCnic && normalizeIdentity(row.cnic) === normalizedCnic;
+      return !sameId && (sameEmail || samePhone || sameCnic);
+    });
+
+    if (duplicate) {
+      if (text(duplicate.status) === "Archived") {
+        setArchivedPrompt({
+          id: text(duplicate.id),
+          fullName: text(duplicate.full_name) || "Resident",
+          cnic: text(duplicate.cnic),
+          email: text(duplicate.email),
+          phone: text(duplicate.phone),
+          residentCode: text(duplicate.resident_code),
+        });
+        setSaving(false);
+        return;
+      }
+
+      setError("A resident with the same email, phone, or CNIC already exists.");
+      setSaving(false);
+      return;
+    }
+
+    await executeSave();
   }
 
   async function handleResetPortalPassword(resident: Resident) {
@@ -1123,6 +1281,29 @@ export default function ResidentsPage() {
                 </Field>
               </div>
 
+              {liveArchivedMatch && !editingId && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="flex items-center gap-1.5 font-semibold text-amber-950">
+                        <span>ℹ️</span> Previously Deleted / Archived Resident Detected
+                      </p>
+                      <p className="mt-0.5 text-xs text-amber-800">
+                        A matching archived profile was found: <span className="font-semibold">{liveArchivedMatch.fullName}</span> ({liveArchivedMatch.cnic || liveArchivedMatch.email || liveArchivedMatch.phone}). Saving will prompt to re-add this resident with fresh data.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => setArchivedPrompt(liveArchivedMatch)}
+                      className="shrink-0 rounded-lg bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-amber-800"
+                    >
+                      Review & Re-add Fresh
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-6 sm:flex-row sm:justify-end">
                 <button type="button" onClick={closeForm} className="rounded-xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700">Cancel</button>
                 <button type="submit" disabled={saving || documentsUploading} className="rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white disabled:opacity-60">
@@ -1131,6 +1312,83 @@ export default function ResidentsPage() {
               </div>
             </form>
           </section>
+        )}
+
+        {archivedPrompt && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+              <div className="flex items-start gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-700 font-bold text-xl">
+                  !
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Re-add Deleted Resident</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    A previously deleted / archived resident record matches the details entered.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 space-y-2">
+                <div className="flex justify-between items-center text-xs sm:text-sm">
+                  <span className="text-slate-500">Previous Name:</span>
+                  <span className="font-medium text-slate-900">{archivedPrompt.fullName}</span>
+                </div>
+                {archivedPrompt.cnic && (
+                  <div className="flex justify-between items-center text-xs sm:text-sm">
+                    <span className="text-slate-500">CNIC / Passport:</span>
+                    <span className="font-mono text-slate-800">{archivedPrompt.cnic}</span>
+                  </div>
+                )}
+                {archivedPrompt.email && (
+                  <div className="flex justify-between items-center text-xs sm:text-sm">
+                    <span className="text-slate-500">Email:</span>
+                    <span className="font-medium text-slate-800">{archivedPrompt.email}</span>
+                  </div>
+                )}
+                {archivedPrompt.phone && (
+                  <div className="flex justify-between items-center text-xs sm:text-sm">
+                    <span className="text-slate-500">Phone:</span>
+                    <span className="text-slate-800">{archivedPrompt.phone}</span>
+                  </div>
+                )}
+                {archivedPrompt.residentCode && (
+                  <div className="flex justify-between items-center text-xs sm:text-sm">
+                    <span className="text-slate-500">Resident Code:</span>
+                    <span className="font-mono text-slate-800">{archivedPrompt.residentCode}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3.5 text-xs text-indigo-950 space-y-1.5">
+                <p className="font-semibold text-indigo-900">What happens when you re-add with fresh data?</p>
+                <ul className="list-disc pl-4 space-y-1 text-indigo-800">
+                  <li>Profile details are refreshed with the new information you just entered.</li>
+                  <li>Status is restored to <span className="font-semibold">Inactive</span>, making the resident immediately available for fresh room admission and billing.</li>
+                  <li>A fresh portal login is configured with a new temporary password.</li>
+                </ul>
+              </div>
+
+              <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => setArchivedPrompt(null)}
+                  className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => executeSave(archivedPrompt.id)}
+                  className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {saving ? "Re-adding..." : "Re-add with Fresh Data"}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
