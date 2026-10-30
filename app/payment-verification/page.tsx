@@ -38,6 +38,7 @@ type PaymentReceipt = {
   resident_id: string;
   bill_id: string | null;
   receipt_url: string;
+  original_file_name?: string | null;
   reference_number: string | null;
   amount: number;
   status: ReceiptStatus;
@@ -59,7 +60,7 @@ function text(value: unknown) {
   return value == null ? "" : String(value);
 }
 
-function firstText(row: GenericRow | undefined, keys: string[]) {
+function firstText(row: GenericRow | null | undefined, keys: string[]) {
   if (!row) return "";
 
   for (const key of keys) {
@@ -77,7 +78,7 @@ function firstText(row: GenericRow | undefined, keys: string[]) {
   return "";
 }
 
-function residentName(row: GenericRow | undefined) {
+function residentName(row: GenericRow | null | undefined) {
   return String(row?.full_name || "Resident");
 }
 
@@ -145,6 +146,80 @@ export default function PaymentVerificationPage() {
   const [error, setError] = useState("");
 
   const [corrections, setCorrections] = useState<RentCorrection[]>([]);
+  const [previewReceipt, setPreviewReceipt] = useState<PaymentReceipt | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [previewZoom, setPreviewZoom] = useState(1);
+  const [previewRotation, setPreviewRotation] = useState(0);
+
+  const openReceiptModal = useCallback(async (receipt: PaymentReceipt) => {
+    setPreviewReceipt(receipt);
+    setPreviewUrl(null);
+    setPreviewLoading(true);
+    setPreviewError("");
+    setPreviewZoom(1);
+    setPreviewRotation(0);
+
+    try {
+      const storedPath = receipt.receipt_url;
+      if (!storedPath) {
+        throw new Error("No receipt file path was submitted for this record.");
+      }
+      if (/^https?:\/\//i.test(storedPath)) {
+        setPreviewUrl(storedPath);
+        setPreviewLoading(false);
+        return;
+      }
+      const { data, error } = await supabase.storage
+        .from("payment-receipts")
+        .createSignedUrl(storedPath, 60 * 30);
+      if (error || !data?.signedUrl) {
+        throw new Error(getSupabaseErrorMessage(error, "Unable to load receipt image from storage."));
+      }
+      setPreviewUrl(data.signedUrl);
+    } catch (err) {
+      setPreviewError(err instanceof Error ? err.message : "Unable to load receipt.");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, []);
+
+  const closeReceiptModal = useCallback(() => {
+    setPreviewReceipt(null);
+    setPreviewUrl(null);
+    setPreviewError("");
+    setPreviewZoom(1);
+    setPreviewRotation(0);
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && previewReceipt) {
+        closeReceiptModal();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [previewReceipt, closeReceiptModal]);
+
+  const previewResident = useMemo(() => {
+    return previewReceipt
+      ? residents.find((item) => text(item.id) === previewReceipt.resident_id)
+      : null;
+  }, [previewReceipt, residents]);
+
+  const previewBill = useMemo(() => {
+    return previewReceipt
+      ? bills.find((item) => text(item.id) === previewReceipt.bill_id)
+      : null;
+  }, [previewReceipt, bills]);
+
+  const isPdf = useMemo(() => {
+    if (!previewReceipt) return false;
+    const path = (previewReceipt.original_file_name || previewReceipt.receipt_url || "").toLowerCase();
+    return Boolean(path.split("?")[0].endsWith(".pdf"));
+  }, [previewReceipt]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -536,24 +611,14 @@ export default function PaymentVerificationPage() {
                         <td className="px-3 py-3">
                           <button
                             type="button"
-                            onClick={async () => {
-                              const storedPath = receipt.receipt_url;
-                              if (/^https?:\/\//i.test(storedPath)) {
-                                window.open(storedPath, "_blank", "noopener,noreferrer");
-                                return;
-                              }
-                              const { data, error } = await supabase.storage
-                                .from("payment-receipts")
-                                .createSignedUrl(storedPath, 60 * 5);
-                              if (error || !data?.signedUrl) {
-                                setError(getSupabaseErrorMessage(error, "Unable to open this receipt."));
-                                return;
-                              }
-                              window.open(data.signedUrl, "_blank", "noopener,noreferrer");
-                            }}
-                            className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700"
+                            onClick={() => void openReceiptModal(receipt)}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 px-3 py-2 text-xs font-semibold text-indigo-700 shadow-2xs hover:bg-indigo-100 hover:text-indigo-800 transition"
                           >
-                            Open Receipt
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
+                            <span>Open Receipt</span>
                           </button>
                         </td>
 
@@ -614,6 +679,241 @@ export default function PaymentVerificationPage() {
             </table>
           </div>
         </section>
+
+        {previewReceipt && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="receipt-preview-title"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-3 sm:p-4 md:p-6 backdrop-blur-sm"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) closeReceiptModal();
+            }}
+          >
+            <div className="relative flex flex-col w-full max-w-4xl max-h-[92vh] rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 bg-slate-50/70">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-700">
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 id="receipt-preview-title" className="text-base font-bold text-slate-900 sm:text-lg">
+                      Payment Receipt Preview
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      {residentName(previewResident)} {previewResident?.phone ? `• ${previewResident.phone}` : ""}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${statusClass(
+                      displayStatus(previewReceipt)
+                    )}`}
+                  >
+                    {corrections.some(c => c.original_payment_id === previewReceipt.payment_id) ? "Corrected" : displayStatus(previewReceipt)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={closeReceiptModal}
+                    className="rounded-lg p-2 text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition"
+                    aria-label="Close"
+                  >
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              {/* Quick Info Bar */}
+              <div className="grid grid-cols-2 gap-3 border-b border-slate-200 bg-white px-5 py-3 text-xs sm:grid-cols-4">
+                <div>
+                  <span className="block text-slate-400 font-medium">Submitted Amount</span>
+                  <span className="text-sm font-bold text-emerald-700">{money(previewReceipt.amount)}</span>
+                </div>
+                <div>
+                  <span className="block text-slate-400 font-medium">Payment Purpose</span>
+                  <span className="font-semibold text-slate-800">
+                    {!previewReceipt.bill_id && isSecurityDepositReceipt(previewReceipt.notes)
+                      ? "Security Deposit"
+                      : firstText(previewBill, ["bill_type"]) === "Rent"
+                      ? rentPeriodLabel(previewBill?.billing_month)
+                      : firstText(previewBill, ["bill_type"]) || "Bill Payment"}
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-slate-400 font-medium">Payment Method</span>
+                  <span className="font-semibold text-slate-800">{receiptPaymentMethod(previewReceipt.notes)}</span>
+                </div>
+                <div>
+                  <span className="block text-slate-400 font-medium">Submitted Date</span>
+                  <span className="font-semibold text-slate-800">
+                    {new Date(previewReceipt.created_at).toLocaleDateString("en-PK", {
+                      day: "2-digit",
+                      month: "short",
+                      year: "numeric",
+                    })}
+                  </span>
+                </div>
+              </div>
+
+              {/* Preview Body with Zoom / Rotate Toolbar */}
+              <div className="relative flex-1 overflow-auto bg-slate-900/90 p-4 min-h-[320px] max-h-[58vh] flex items-center justify-center select-none">
+                {previewLoading ? (
+                  <div className="flex flex-col items-center gap-3 text-slate-300">
+                    <div className="h-8 w-8 animate-spin rounded-full border-3 border-indigo-400 border-t-transparent" />
+                    <p className="text-sm font-medium">Loading receipt preview...</p>
+                  </div>
+                ) : previewError ? (
+                  <div className="flex flex-col items-center gap-3 p-6 text-center text-red-200 bg-red-950/60 rounded-xl max-w-md">
+                    <p className="text-sm font-medium">{previewError}</p>
+                    <button
+                      type="button"
+                      onClick={() => void openReceiptModal(previewReceipt)}
+                      className="rounded-lg bg-red-800 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-red-700 transition"
+                    >
+                      Retry Loading
+                    </button>
+                  </div>
+                ) : previewUrl ? (
+                  <>
+                    {/* Floating Controls for Image */}
+                    {!isPdf && (
+                      <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5 rounded-lg bg-slate-800/85 p-1 backdrop-blur-md border border-slate-700 text-white shadow-lg">
+                        <button
+                          type="button"
+                          onClick={() => setPreviewZoom(z => Math.max(z - 0.25, 0.5))}
+                          className="rounded p-1.5 hover:bg-slate-700 transition"
+                          title="Zoom Out"
+                        >
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                          </svg>
+                        </button>
+                        <span className="px-1.5 text-xs font-mono font-medium">{Math.round(previewZoom * 100)}%</span>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewZoom(z => Math.min(z + 0.25, 3.5))}
+                          className="rounded p-1.5 hover:bg-slate-700 transition"
+                          title="Zoom In"
+                        >
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setPreviewZoom(1); setPreviewRotation(0); }}
+                          className="rounded px-2 py-1 text-xs hover:bg-slate-700 transition"
+                          title="Reset"
+                        >
+                          Reset
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewRotation(r => (r + 90) % 360)}
+                          className="rounded p-1.5 hover:bg-slate-700 transition"
+                          title="Rotate 90°"
+                        >
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </button>
+                      </div>
+                    )}
+
+                    {isPdf ? (
+                      <div className="w-full h-[55vh] flex flex-col">
+                        <iframe
+                          src={previewUrl}
+                          className="w-full h-full rounded-lg bg-white border border-slate-700"
+                          title="PDF Receipt Preview"
+                        />
+                      </div>
+                    ) : (
+                      <div className="overflow-auto flex items-center justify-center w-full h-full p-2">
+                        <img
+                          src={previewUrl}
+                          alt={`Receipt submitted by ${residentName(previewResident)}`}
+                          style={{
+                            transform: `scale(${previewZoom}) rotate(${previewRotation}deg)`,
+                            transition: "transform 0.15s ease-out",
+                          }}
+                          className="max-h-[55vh] max-w-full object-contain rounded-lg shadow-md"
+                        />
+                      </div>
+                    )}
+                  </>
+                ) : null}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="flex flex-col-reverse gap-3 border-t border-slate-200 px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between bg-white">
+                <div className="flex items-center gap-2">
+                  {previewUrl && (
+                    <a
+                      href={previewUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
+                    >
+                      <span>Open in New Tab</span>
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      </svg>
+                    </a>
+                  )}
+                  {previewReceipt.reference_number && (
+                    <span className="text-xs text-slate-500">Ref: {previewReceipt.reference_number}</span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 justify-end">
+                  {displayStatus(previewReceipt) === "Pending Verification" && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={updatingId === previewReceipt.id}
+                        onClick={async () => {
+                          const target = previewReceipt;
+                          await updateReceiptStatus(target, "Rejected");
+                          closeReceiptModal();
+                        }}
+                        className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 transition disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        disabled={updatingId === previewReceipt.id}
+                        onClick={async () => {
+                          const target = previewReceipt;
+                          await updateReceiptStatus(target, "Verified");
+                          closeReceiptModal();
+                        }}
+                        className="rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 transition disabled:opacity-50"
+                      >
+                        {updatingId === previewReceipt.id ? "Verifying..." : "Verify Receipt"}
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={closeReceiptModal}
+                    className="rounded-lg border border-slate-300 px-4 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );
