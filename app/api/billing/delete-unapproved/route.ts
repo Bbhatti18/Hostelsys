@@ -97,21 +97,60 @@ export async function POST(request: NextRequest) {
       .delete()
       .in("bill_id", validIds);
 
-    // 6. Delete the unapproved bills
-    const { error: deleteError } = await supabaseAdmin
-      .from("bills")
-      .delete()
-      .in("id", validIds);
+    // 6. Delete or retire the unapproved bills
+    const deletedIds: string[] = [];
+    const cancelledIds: string[] = [];
+    const failedIds: string[] = [];
 
-    if (deleteError) {
-      console.error("[delete-unapproved] Failed to delete bills from public.bills:", deleteError);
-      return apiError("Failed to delete the selected pending bills.", 500);
+    for (const billId of validIds) {
+      const { error: deleteErr } = await supabaseAdmin
+        .from("bills")
+        .delete()
+        .eq("id", billId);
+
+      if (!deleteErr) {
+        deletedIds.push(billId);
+        continue;
+      }
+
+      // If hard delete is restricted (e.g. payment_allocations from a rejected payment),
+      // transition to Cancelled so the obligation is safely retired and removed from Awaiting Approval
+      // without violating immutable payment ledger constraints.
+      const { error: cancelErr } = await supabaseAdmin
+        .from("bills")
+        .update({
+          bill_status: "Cancelled",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", billId);
+
+      if (!cancelErr) {
+        cancelledIds.push(billId);
+      } else {
+        console.error(
+          `[delete-unapproved] Failed to delete or cancel bill ${billId}:`,
+          deleteErr,
+          cancelErr,
+        );
+        failedIds.push(billId);
+      }
+    }
+
+    if (
+      deletedIds.length === 0 &&
+      cancelledIds.length === 0 &&
+      failedIds.length > 0
+    ) {
+      return apiError(
+        "The selected bills could not be deleted due to database constraints.",
+        500,
+      );
     }
 
     return apiJson({
       success: true,
-      deletedCount: validIds.length,
-      deletedIds: validIds,
+      deletedCount: deletedIds.length + cancelledIds.length,
+      deletedIds: [...deletedIds, ...cancelledIds],
     });
   } catch (error) {
     console.error("[delete-unapproved] Unexpected error:", error);

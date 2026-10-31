@@ -147,7 +147,7 @@ export async function POST(request: NextRequest) {
           approved: false,
           emailStatus: "not_attempted",
           reason: approveError
-            ? "The bill could not be approved."
+            ? approveError.message || "The bill could not be approved."
             : "The bill changed before approval completed. Refresh and try again.",
         });
         continue;
