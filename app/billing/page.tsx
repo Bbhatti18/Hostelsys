@@ -32,6 +32,7 @@ import {
 } from "@/lib/billApproval";
 import {
   approveBills,
+  deleteUnapprovedBills,
   generateBillsForMonth,
   type ApprovalResult,
   type BulkGenerateResult,
@@ -302,6 +303,7 @@ function BillingContent() {
   const [showBulkGenerateModal, setShowBulkGenerateModal] = useState(false);
   const [bulkTargetMonth, setBulkTargetMonth] = useState(billingMonthOf());
   const [approvingIds, setApprovingIds] = useState<string[]>([]);
+  const [deletingBillIds, setDeletingBillIds] = useState<string[]>([]);
   const [selectedForApproval, setSelectedForApproval] = useState<string[]>([]);
   const [billEmailStatus, setBillEmailStatus] = useState<Record<string, string>>({});
   const [sendingEmailBillId, setSendingEmailBillId] = useState<string | null>(null);
@@ -798,6 +800,114 @@ function BillingContent() {
     }
   }
 
+  async function handleDeletePendingBill(bill: Bill) {
+    if (deletingBillIds.length > 0 || approvingIds.length > 0) return;
+    if (
+      !window.confirm(
+        `Permanently delete pending bill ${bill.bill_number}? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
+    setMessage("");
+    setError("");
+    setDeletingBillIds([bill.id]);
+
+    try {
+      const result = await deleteUnapprovedBills([bill.id]);
+      if (result.deletedCount === 0) {
+        pushToast(
+          "error",
+          "Delete Failed",
+          "The pending bill could not be deleted.",
+        );
+      } else {
+        pushToast(
+          "success",
+          "Pending Bill Deleted",
+          `Bill ${bill.bill_number} has been deleted.`,
+        );
+        if (editingId === bill.id) {
+          closeForm();
+        }
+      }
+
+      setSelectedForApproval((current) =>
+        current.filter((id) => id !== bill.id),
+      );
+      await refresh();
+    } catch (deleteErr) {
+      const detail =
+        deleteErr instanceof Error
+          ? deleteErr.message
+          : "The pending bill could not be deleted.";
+      setError(detail);
+      pushToast("error", "Delete Failed", detail);
+    } finally {
+      setDeletingBillIds([]);
+    }
+  }
+
+  async function handleBulkDeletePending(billIds: string[]) {
+    if (
+      billIds.length === 0 ||
+      deletingBillIds.length > 0 ||
+      approvingIds.length > 0
+    ) {
+      return;
+    }
+    if (
+      !window.confirm(
+        `Permanently delete ${billIds.length} pending bill${
+          billIds.length === 1 ? "" : "s"
+        }? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+
+    setMessage("");
+    setError("");
+    setDeletingBillIds(billIds);
+
+    try {
+      const result = await deleteUnapprovedBills(billIds);
+      if (result.deletedCount === 0) {
+        pushToast(
+          "error",
+          "Delete Failed",
+          "None of the selected bills could be deleted.",
+        );
+      } else {
+        pushToast(
+          "success",
+          "Pending Bills Deleted",
+          `${result.deletedCount} pending bill${
+            result.deletedCount === 1 ? "" : "s"
+          } deleted successfully.`,
+        );
+        if (editingId && billIds.includes(editingId)) {
+          closeForm();
+        }
+      }
+
+      setSelectedForApproval((current) =>
+        current.filter((id) => !billIds.includes(id)),
+      );
+      await refresh();
+    } catch (deleteErr) {
+      const detail =
+        deleteErr instanceof Error
+          ? deleteErr.message
+          : "The selected pending bills could not be deleted.";
+      setError(detail);
+      pushToast("error", "Delete Failed", detail);
+    } finally {
+      setDeletingBillIds([]);
+    }
+  }
+
   function describeGeneration(result: BulkGenerateResult) {
     const parts = [
       `${result.activeAdmissionCount} active admission${result.activeAdmissionCount === 1 ? "" : "s"} reviewed`,
@@ -1117,6 +1227,17 @@ function BillingContent() {
     setMessage("");
     setError("");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function closeForm() {
+    editRequestId.current += 1;
+    setEditingId(null);
+    setEditingAcBillId(null);
+    setEditingWithoutMeterRecord(false);
+    setForm(emptyForm);
+    setShowForm(false);
+    setMessage("");
+    setError("");
   }
 
   function openAddForm() {
@@ -1731,6 +1852,10 @@ function BillingContent() {
   }
 
   async function deleteBill(bill: Bill) {
+    if (isUnapprovedBill(bill.bill_status)) {
+      return handleDeletePendingBill(bill);
+    }
+
     const { data: currentBill, error: currentError } = await supabase.from("bills").select("bill_type").eq("id", bill.id).single();
     if (currentError || !currentBill || currentBill.bill_type === "Security Deposit") {
       setError("Security deposit history must be preserved. Use cancellation after reconciling payments."); return;
@@ -1742,6 +1867,9 @@ function BillingContent() {
     setMessage("");
     setError("");
 
+    // Unlink meter readings first so foreign key constraint does not block deletion
+    await supabase.from("ac_bills").update({ bill_id: null }).eq("bill_id", bill.id);
+
     const { error: deleteError } = await supabase
       .from("bills")
       .delete()
@@ -1751,6 +1879,7 @@ function BillingContent() {
       setError(getSupabaseErrorMessage(deleteError, "The bill could not be deleted. It may have linked records."));
     } else {
       setMessage("Bill permanently deleted.");
+      if (editingId === bill.id) closeForm();
       await refresh();
     }
   }
@@ -2383,7 +2512,7 @@ function BillingContent() {
 
               <button
                 type="button"
-                onClick={() => setShowForm(false)}
+                onClick={closeForm}
                 className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
               >
                 Close
@@ -2759,6 +2888,8 @@ function BillingContent() {
                     disabled
                     className={inputClass}
                   >
+                    <option value="Pending Approval">Pending Approval</option>
+                    <option value="Draft">Draft</option>
                     <option value="Pending">Pending</option>
                     <option value="Partially Paid">
                       Partially Paid
@@ -2803,7 +2934,7 @@ function BillingContent() {
               <div className="flex flex-wrap justify-end gap-3">
                 <button
                   type="button"
-                  onClick={() => setShowForm(false)}
+                  onClick={closeForm}
                   className="rounded-xl border border-slate-300 px-5 py-3 text-sm font-semibold"
                 >
                   Cancel
@@ -2875,11 +3006,49 @@ function BillingContent() {
                 selected
               </span>
 
+              {approvalSelection.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void handleBulkDeletePending(approvalSelection)}
+                  disabled={
+                    deletingBillIds.length > 0 || approvingIds.length > 0
+                  }
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Permanently delete selected pending bills"
+                >
+                  {deletingBillIds.length > 0 ? (
+                    <>
+                      <Spinner />
+                      Deleting {deletingBillIds.length}...
+                    </>
+                  ) : (
+                    <>
+                      <svg
+                        className="h-4 w-4 text-rose-600"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                        />
+                      </svg>
+                      Delete Selected ({approvalSelection.length})
+                    </>
+                  )}
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => void handleApprove(approvalSelection)}
                 disabled={
-                  approvalSelection.length === 0 || approvingIds.length > 0
+                  approvalSelection.length === 0 ||
+                  approvingIds.length > 0 ||
+                  deletingBillIds.length > 0
                 }
                 className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -2939,7 +3108,7 @@ function BillingContent() {
                         All
                       </label>
                     </th>
-                    {["Bill", "Resident", "Month", "Total", "Due Date", "Status", ""].map(
+                    {["Bill", "Resident", "Month", "Total", "Due Date", "Status"].map(
                       (heading, index) => (
                         <th
                           key={heading || `col-${index}`}
@@ -2949,6 +3118,9 @@ function BillingContent() {
                         </th>
                       ),
                     )}
+                    <th className="px-5 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
 
@@ -2958,6 +3130,7 @@ function BillingContent() {
                       (item) => text(item.id) === bill.resident_id,
                     );
                     const busy = approvingIds.includes(bill.id);
+                    const deleting = deletingBillIds.includes(bill.id);
                     const residentEmail = text(resident?.email);
 
                     return (
@@ -3006,21 +3179,79 @@ function BillingContent() {
                         </td>
 
                         <td className="px-5 py-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => void handleApprove([bill.id])}
-                            disabled={approvingIds.length > 0}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {busy ? (
-                              <>
-                                <Spinner />
-                                Approving
-                              </>
-                            ) : (
-                              <>Approve</>
-                            )}
-                          </button>
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void openEditForm(bill)}
+                              disabled={busy || deleting}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50 shadow-2xs"
+                              title="Edit this pending bill"
+                            >
+                              <svg
+                                className="h-3.5 w-3.5 text-slate-500"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                                />
+                              </svg>
+                              Edit
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => void handleDeletePendingBill(bill)}
+                              disabled={busy || deleting}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
+                              title="Permanently delete this pending bill"
+                            >
+                              {deleting ? (
+                                <>
+                                  <Spinner />
+                                  Deleting
+                                </>
+                              ) : (
+                                <>
+                                  <svg
+                                    className="h-3.5 w-3.5 text-rose-500"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                    />
+                                  </svg>
+                                  Delete
+                                </>
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => void handleApprove([bill.id])}
+                              disabled={approvingIds.length > 0 || deleting}
+                              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-violet-600 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50 shadow-2xs"
+                              title="Approve and release bill"
+                            >
+                              {busy ? (
+                                <>
+                                  <Spinner />
+                                  Approving
+                                </>
+                              ) : (
+                                <>Approve</>
+                              )}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );

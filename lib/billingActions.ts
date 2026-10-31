@@ -79,6 +79,19 @@ export function generateBillsForMonth(billingMonth?: string) {
   });
 }
 
+export type DeleteUnapprovedResult = {
+  success: boolean;
+  deletedCount: number;
+  deletedIds: string[];
+};
+
 export function approveBills(billIds: string[]) {
   return postJson<ApprovalResult>("/api/billing/approve", { billIds });
 }
+
+export function deleteUnapprovedBills(billIds: string[]) {
+  return postJson<DeleteUnapprovedResult>("/api/billing/delete-unapproved", {
+    billIds,
+  });
+}
+
