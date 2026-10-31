@@ -26,6 +26,7 @@ import {
 } from "@/lib/notifications/client";
 import {
   billingMonthOf,
+  todayDateString,
   isUnapprovedBill,
   UNAPPROVED_BILL_STATUSES,
 } from "@/lib/billApproval";
@@ -130,7 +131,7 @@ type AcBill = {
   remarks: string | null;
 };
 
-const currentMonth = new Date().toISOString().slice(0, 7);
+const currentMonth = billingMonthOf();
 
 function monthInputValue(value: string) {
   return value ? value.slice(0, 7) : "";
@@ -149,7 +150,7 @@ function monthEndDate(value: string) {
   return new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
 }
 
-const today = new Date().toISOString().slice(0, 10);
+const today = todayDateString();
 
 const emptyForm: BillForm = {
   resident_id: "",
@@ -298,6 +299,8 @@ function BillingContent() {
   const [error, setError] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [generating, setGenerating] = useState(false);
+  const [showBulkGenerateModal, setShowBulkGenerateModal] = useState(false);
+  const [bulkTargetMonth, setBulkTargetMonth] = useState(billingMonthOf());
   const [approvingIds, setApprovingIds] = useState<string[]>([]);
   const [selectedForApproval, setSelectedForApproval] = useState<string[]>([]);
   const [billEmailStatus, setBillEmailStatus] = useState<Record<string, string>>({});
@@ -808,23 +811,20 @@ function BillingContent() {
     return parts.join(" · ");
   }
 
-  async function handleGenerateAll() {
-    if (generating) return;
+  function handleGenerateAll() {
+    setBulkTargetMonth(billingMonthOf());
+    setShowBulkGenerateModal(true);
+  }
 
-    const billingMonth = billingMonthOf();
-    const confirmed = window.confirm(
-      `Generate bills for every active admission for ${monthLabel(billingMonth)}?\n\n` +
-        "Each bill is created as \"Pending Approval\" and stays hidden from residents " +
-        "until you approve it. Residents with a bill for this month are skipped.",
-    );
-    if (!confirmed) return;
+  async function executeBulkGenerate(targetMonth: string) {
+    if (generating || !targetMonth) return;
 
     setMessage("");
     setError("");
     setGenerating(true);
 
     try {
-      const result = await generateBillsForMonth(billingMonth);
+      const result = await generateBillsForMonth(targetMonth);
 
       if (result.createdCount === 0) {
         pushToast(
@@ -841,6 +841,7 @@ function BillingContent() {
         setStatusFilter("Pending Approval");
       }
 
+      setShowBulkGenerateModal(false);
       await refresh();
     } catch (generateError) {
       const detail =
@@ -2231,6 +2232,134 @@ function BillingContent() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {showBulkGenerateModal && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="bulk-generate-title"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget && !generating) {
+                setShowBulkGenerateModal(false);
+              }
+            }}
+          >
+            <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl space-y-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-700">
+                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2zM10 8.5a.5.5 0 11-1 0 .5.5 0 011 0zm5 5a.5.5 0 11-1 0 .5.5 0 011 0z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 id="bulk-generate-title" className="text-lg font-bold text-slate-900">
+                      Generate Monthly Rent Bills
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Generate rent bills for all active residents for {monthLabel(bulkTargetMonth)}.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={generating}
+                  onClick={() => setShowBulkGenerateModal(false)}
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition"
+                  aria-label="Close"
+                >
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
+                  Target Billing Month
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="month"
+                    value={bulkTargetMonth}
+                    onChange={(e) => setBulkTargetMonth(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-semibold text-slate-900 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+                  />
+                  <span className="shrink-0 rounded-xl bg-slate-100 px-3.5 py-2.5 text-sm font-semibold text-indigo-700">
+                    {monthLabel(bulkTargetMonth)}
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setBulkTargetMonth(billingMonthOf())}
+                    className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                      bulkTargetMonth === billingMonthOf()
+                        ? "bg-indigo-600 text-white shadow-xs"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    }`}
+                  >
+                    {monthLabel(billingMonthOf())} (Current Month)
+                  </button>
+                  {(() => {
+                    const [y, m] = billingMonthOf().split("-").map(Number);
+                    const prevMonth = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => setBulkTargetMonth(prevMonth)}
+                        className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                          bulkTargetMonth === prevMonth
+                            ? "bg-indigo-600 text-white shadow-xs"
+                            : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                        }`}
+                      >
+                        {monthLabel(prevMonth)}
+                      </button>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 p-3.5 text-xs text-indigo-950 space-y-1.5">
+                <p className="font-semibold text-indigo-900">Important Details:</p>
+                <ul className="list-disc pl-4 space-y-1 text-indigo-800">
+                  <li>Each bill is created as <span className="font-semibold">Pending Approval</span> and stays hidden from residents until you review and approve it.</li>
+                  <li>Residents who already have a bill for {monthLabel(bulkTargetMonth)} are automatically skipped.</li>
+                  <li>Due dates automatically follow each resident&apos;s admission anniversary.</li>
+                </ul>
+              </div>
+
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end border-t border-slate-100 pt-3">
+                <button
+                  type="button"
+                  disabled={generating}
+                  onClick={() => setShowBulkGenerateModal(false)}
+                  className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={generating || !bulkTargetMonth}
+                  onClick={() => void executeBulkGenerate(bulkTargetMonth)}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 transition disabled:opacity-50"
+                >
+                  {generating ? (
+                    <>
+                      <Spinner />
+                      Generating...
+                    </>
+                  ) : (
+                    `Generate Bills for ${monthLabel(bulkTargetMonth)}`
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         )}
